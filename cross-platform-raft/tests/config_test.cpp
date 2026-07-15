@@ -7,45 +7,52 @@
 
 #include "config/config_loader.h"
 
-namespace cpr::config {
-namespace {
+namespace cpr::config
+{
+  namespace
+  {
 
-class TempDir {
-public:
-    TempDir() {
+    class TempDir
+    {
+    public:
+      TempDir()
+      {
         const auto unique =
             std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
         path_ = std::filesystem::temp_directory_path() /
                 ("cpr-config-test-" + unique);
         std::filesystem::create_directories(path_);
-    }
+      }
 
-    ~TempDir() {
+      ~TempDir()
+      {
         std::error_code error;
         std::filesystem::remove_all(path_, error);
+      }
+
+      const std::filesystem::path &path() const { return path_; }
+
+    private:
+      std::filesystem::path path_;
+    };
+
+    std::filesystem::path WriteConfigFile(const TempDir &dir,
+                                          const std::string &file_name,
+                                          const std::string &body)
+    {
+      const std::filesystem::path path = dir.path() / file_name;
+      std::ofstream output(path);
+      output << body;
+      return path;
     }
 
-    const std::filesystem::path& path() const { return path_; }
-
-private:
-    std::filesystem::path path_;
-};
-
-std::filesystem::path WriteConfigFile(const TempDir& dir,
-                                      const std::string& file_name,
-                                      const std::string& body) {
-    const std::filesystem::path path = dir.path() / file_name;
-    std::ofstream output(path);
-    output << body;
-    return path;
-}
-
-TEST(ConfigTest, LoadsValidConfiguration) {
-    TempDir dir;
-    const std::filesystem::path path = WriteConfigFile(
-        dir,
-        "valid.json",
-        R"({
+    TEST(ConfigTest, LoadsValidConfiguration)
+    {
+      TempDir dir;
+      const std::filesystem::path path = WriteConfigFile(
+          dir,
+          "valid.json",
+          R"({
   "node_id": "node-1",
   "ip_address": "127.0.0.1",
   "raft_port": 7101,
@@ -77,19 +84,20 @@ TEST(ConfigTest, LoadsValidConfiguration) {
   "log_level": "INFO"
 })");
 
-    Config config;
-    const common::Status status = ConfigLoader::LoadFromFile(path, &config);
-    ASSERT_TRUE(status.ok()) << status.ToString();
-    EXPECT_EQ(config.node_id, "node-1");
-    EXPECT_EQ(config.initial_members.size(), 1U);
-}
+      Config config;
+      const common::Status status = ConfigLoader::LoadFromFile(path, &config);
+      ASSERT_TRUE(status.ok()) << status.ToString();
+      EXPECT_EQ(config.node_id, "node-1");
+      EXPECT_EQ(config.initial_members.size(), 1U);
+    }
 
-TEST(ConfigTest, RejectsInvalidNodeIdPortAndEmptyPath) {
-    TempDir dir;
-    const std::filesystem::path path = WriteConfigFile(
-        dir,
-        "invalid.json",
-        R"({
+    TEST(ConfigTest, RejectsInvalidNodeIdPortAndEmptyPath)
+    {
+      TempDir dir;
+      const std::filesystem::path path = WriteConfigFile(
+          dir,
+          "invalid.json",
+          R"({
   "node_id": "",
   "ip_address": "127.0.0.1",
   "raft_port": 0,
@@ -121,17 +129,18 @@ TEST(ConfigTest, RejectsInvalidNodeIdPortAndEmptyPath) {
   "log_level": "INFO"
 })");
 
-    Config config;
-    const common::Status status = ConfigLoader::LoadFromFile(path, &config);
-    EXPECT_EQ(status.code(), common::StatusCode::kInvalidArgument);
-}
+      Config config;
+      const common::Status status = ConfigLoader::LoadFromFile(path, &config);
+      EXPECT_EQ(status.code(), common::StatusCode::kInvalidArgument);
+    }
 
-TEST(ConfigTest, RejectsCurrentNodeMissingFromInitialMembers) {
-    TempDir dir;
-    const std::filesystem::path path = WriteConfigFile(
-        dir,
-        "missing-node.json",
-        R"({
+    TEST(ConfigTest, RejectsCurrentNodeMissingFromInitialMembers)
+    {
+      TempDir dir;
+      const std::filesystem::path path = WriteConfigFile(
+          dir,
+          "missing-node.json",
+          R"({
   "node_id": "node-1",
   "ip_address": "127.0.0.1",
   "raft_port": 7101,
@@ -163,19 +172,20 @@ TEST(ConfigTest, RejectsCurrentNodeMissingFromInitialMembers) {
   "log_level": "INFO"
 })");
 
-    Config config;
-    const common::Status status = ConfigLoader::LoadFromFile(path, &config);
-    EXPECT_EQ(status.code(), common::StatusCode::kInvalidArgument);
-    EXPECT_NE(status.message().find("node_id must exist in initial_members"),
-              std::string::npos);
-}
+      Config config;
+      const common::Status status = ConfigLoader::LoadFromFile(path, &config);
+      EXPECT_EQ(status.code(), common::StatusCode::kInvalidArgument);
+      EXPECT_NE(status.message().find("node_id must exist in initial_members"),
+                std::string::npos);
+    }
 
-TEST(ConfigTest, RejectsHeartbeatNotLessThanElectionTimeout) {
-    TempDir dir;
-    const std::filesystem::path path = WriteConfigFile(
-        dir,
-        "heartbeat.json",
-        R"({
+    TEST(ConfigTest, RejectsHeartbeatNotLessThanElectionTimeout)
+    {
+      TempDir dir;
+      const std::filesystem::path path = WriteConfigFile(
+          dir,
+          "heartbeat.json",
+          R"({
   "node_id": "node-1",
   "ip_address": "127.0.0.1",
   "raft_port": 7101,
@@ -207,18 +217,19 @@ TEST(ConfigTest, RejectsHeartbeatNotLessThanElectionTimeout) {
   "log_level": "INFO"
 })");
 
-    Config config;
-    const common::Status status = ConfigLoader::LoadFromFile(path, &config);
-    EXPECT_EQ(status.code(), common::StatusCode::kInvalidArgument);
-    EXPECT_NE(status.message().find("heartbeat_interval_ms"), std::string::npos);
-}
+      Config config;
+      const common::Status status = ConfigLoader::LoadFromFile(path, &config);
+      EXPECT_EQ(status.code(), common::StatusCode::kInvalidArgument);
+      EXPECT_NE(status.message().find("heartbeat_interval_ms"), std::string::npos);
+    }
 
-TEST(ConfigTest, RejectsZeroQueueCapacityAndMessageSize) {
-    TempDir dir;
-    const std::filesystem::path path = WriteConfigFile(
-        dir,
-        "limits.json",
-        R"({
+    TEST(ConfigTest, RejectsZeroQueueCapacityAndMessageSize)
+    {
+      TempDir dir;
+      const std::filesystem::path path = WriteConfigFile(
+          dir,
+          "limits.json",
+          R"({
   "node_id": "node-1",
   "ip_address": "127.0.0.1",
   "raft_port": 7101,
@@ -250,22 +261,23 @@ TEST(ConfigTest, RejectsZeroQueueCapacityAndMessageSize) {
   "log_level": "INFO"
 })");
 
-    Config config;
-    const common::Status status = ConfigLoader::LoadFromFile(path, &config);
-    EXPECT_EQ(status.code(), common::StatusCode::kInvalidArgument);
-    EXPECT_NE(status.message().find("queue_capacity"), std::string::npos);
-}
+      Config config;
+      const common::Status status = ConfigLoader::LoadFromFile(path, &config);
+      EXPECT_EQ(status.code(), common::StatusCode::kInvalidArgument);
+      EXPECT_NE(status.message().find("queue_capacity"), std::string::npos);
+    }
 
-TEST(ConfigTest, RejectsMissingFieldWrongTypeAndInvalidJson) {
-    TempDir dir;
-    const std::filesystem::path missing_path = WriteConfigFile(
-        dir,
-        "missing.json",
-        R"({"node_id":"node-1"})");
-    const std::filesystem::path wrong_type_path = WriteConfigFile(
-        dir,
-        "wrong-type.json",
-        R"({
+    TEST(ConfigTest, RejectsMissingFieldWrongTypeAndInvalidJson)
+    {
+      TempDir dir;
+      const std::filesystem::path missing_path = WriteConfigFile(
+          dir,
+          "missing.json",
+          R"({"node_id":"node-1"})");
+      const std::filesystem::path wrong_type_path = WriteConfigFile(
+          dir,
+          "wrong-type.json",
+          R"({
   "node_id": "node-1",
   "ip_address": 123,
   "raft_port": 7101,
@@ -287,17 +299,17 @@ TEST(ConfigTest, RejectsMissingFieldWrongTypeAndInvalidJson) {
   "task_poll_limit": 1,
   "log_level": "INFO"
 })");
-    const std::filesystem::path invalid_json_path =
-        WriteConfigFile(dir, "invalid-json.json", R"({"node_id":)");
+      const std::filesystem::path invalid_json_path =
+          WriteConfigFile(dir, "invalid-json.json", R"({"node_id":)");
 
-    Config config;
-    EXPECT_EQ(ConfigLoader::LoadFromFile(missing_path, &config).code(),
-              common::StatusCode::kInvalidArgument);
-    EXPECT_EQ(ConfigLoader::LoadFromFile(wrong_type_path, &config).code(),
-              common::StatusCode::kInvalidArgument);
-    EXPECT_EQ(ConfigLoader::LoadFromFile(invalid_json_path, &config).code(),
-              common::StatusCode::kInvalidArgument);
-}
+      Config config;
+      EXPECT_EQ(ConfigLoader::LoadFromFile(missing_path, &config).code(),
+                common::StatusCode::kInvalidArgument);
+      EXPECT_EQ(ConfigLoader::LoadFromFile(wrong_type_path, &config).code(),
+                common::StatusCode::kInvalidArgument);
+      EXPECT_EQ(ConfigLoader::LoadFromFile(invalid_json_path, &config).code(),
+                common::StatusCode::kInvalidArgument);
+    }
 
-}  // namespace
-}  // namespace cpr::config
+  } // namespace
+} // namespace cpr::config

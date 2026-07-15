@@ -1,4 +1,5 @@
 add_library(cpr_raft
+    raft_core.cpp
     raft_log.cpp
 )
 

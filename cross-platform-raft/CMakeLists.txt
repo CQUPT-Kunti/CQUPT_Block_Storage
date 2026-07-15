@@ -32,5 +32,6 @@ cpr_detect_dependencies(cpr_dependency_options)
 
 add_subdirectory(src/common)
 add_subdirectory(src/config)
+add_subdirectory(src/platform)
 
 message(STATUS "CrossPlatformRaftMetadataFoundation base CMake configuration is ready")

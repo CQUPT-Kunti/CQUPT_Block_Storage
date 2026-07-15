@@ -5,72 +5,91 @@
 
 #include "raft/raft_types.h"
 
-namespace cpr::raft {
+namespace cpr::raft
+{
 
-struct RequestVoteRequest {
-    common::Term term = common::kInitialTerm;
-    common::NodeId candidate_id = common::kInvalidNodeId;
-    common::LogIndex last_log_index = common::kInvalidLogIndex;
-    common::Term last_log_term = common::kInitialTerm;
-};
+    enum class VoteRejectReason
+    {
+        NONE,
+        STALE_TERM,
+        LOG_OUTDATED,
+        ALREADY_VOTED,
+        LEARNER,
+    };
 
-struct RequestVoteResponse {
-    common::Term term = common::kInitialTerm;
-    bool vote_granted = false;
-};
+    struct RequestVoteRequest
+    {
+        common::Term term = common::kInitialTerm;
+        common::NodeId candidate_id = common::kInvalidNodeId;
+        common::LogIndex last_log_index = common::kInvalidLogIndex;
+        common::Term last_log_term = common::kInitialTerm;
+    };
 
-struct AppendEntriesRequest {
-    common::Term term = common::kInitialTerm;
-    common::NodeId leader_id = common::kInvalidNodeId;
-    common::LogIndex prev_log_index = common::kInvalidLogIndex;
-    common::Term prev_log_term = common::kInitialTerm;
-    std::vector<LogEntry> entries;
-    common::LogIndex leader_commit = common::kInvalidLogIndex;
-};
+    struct RequestVoteResponse
+    {
+        common::Term term = common::kInitialTerm;
+        bool vote_granted = false;
+        VoteRejectReason reject_reason = VoteRejectReason::NONE;
+    };
 
-struct AppendEntriesResponse {
-    common::Term term = common::kInitialTerm;
-    bool success = false;
-    common::LogIndex match_index = common::kInvalidLogIndex;
-    common::LogIndex conflict_index = common::kInvalidLogIndex;
-    common::Term conflict_term = common::kInitialTerm;
-};
+    struct AppendEntriesRequest
+    {
+        common::Term term = common::kInitialTerm;
+        common::NodeId leader_id = common::kInvalidNodeId;
+        common::LogIndex prev_log_index = common::kInvalidLogIndex;
+        common::Term prev_log_term = common::kInitialTerm;
+        std::vector<LogEntry> entries;
+        common::LogIndex leader_commit = common::kInvalidLogIndex;
+    };
 
-struct InstallSnapshotRequest {
-    common::Term term = common::kInitialTerm;
-    common::NodeId leader_id = common::kInvalidNodeId;
-    SnapshotMetadata metadata;
-    OpaquePayload payload;
-};
+    struct AppendEntriesResponse
+    {
+        common::Term term = common::kInitialTerm;
+        bool success = false;
+        common::LogIndex match_index = common::kInvalidLogIndex;
+        common::LogIndex conflict_index = common::kInvalidLogIndex;
+        common::Term conflict_term = common::kInitialTerm;
+    };
 
-struct InstallSnapshotResponse {
-    common::Term term = common::kInitialTerm;
-    bool success = false;
-    common::LogIndex last_included_index = common::kInvalidLogIndex;
-};
+    struct InstallSnapshotRequest
+    {
+        common::Term term = common::kInitialTerm;
+        common::NodeId leader_id = common::kInvalidNodeId;
+        SnapshotMetadata metadata;
+        OpaquePayload payload;
+    };
 
-enum class RaftMessageType {
-    REQUEST_VOTE_REQUEST,
-    REQUEST_VOTE_RESPONSE,
-    APPEND_ENTRIES_REQUEST,
-    APPEND_ENTRIES_RESPONSE,
-    INSTALL_SNAPSHOT_REQUEST,
-    INSTALL_SNAPSHOT_RESPONSE,
-};
+    struct InstallSnapshotResponse
+    {
+        common::Term term = common::kInitialTerm;
+        bool success = false;
+        common::LogIndex last_included_index = common::kInvalidLogIndex;
+    };
 
-using RaftMessagePayload = std::variant<
-    RequestVoteRequest,
-    RequestVoteResponse,
-    AppendEntriesRequest,
-    AppendEntriesResponse,
-    InstallSnapshotRequest,
-    InstallSnapshotResponse>;
+    enum class RaftMessageType
+    {
+        REQUEST_VOTE_REQUEST,
+        REQUEST_VOTE_RESPONSE,
+        APPEND_ENTRIES_REQUEST,
+        APPEND_ENTRIES_RESPONSE,
+        INSTALL_SNAPSHOT_REQUEST,
+        INSTALL_SNAPSHOT_RESPONSE,
+    };
 
-struct RaftMessage {
-    RaftMessageType type = RaftMessageType::REQUEST_VOTE_REQUEST;
-    common::NodeId source_node_id = common::kInvalidNodeId;
-    common::NodeId target_node_id = common::kInvalidNodeId;
-    RaftMessagePayload payload = RequestVoteRequest{};
-};
+    using RaftMessagePayload = std::variant<
+        RequestVoteRequest,
+        RequestVoteResponse,
+        AppendEntriesRequest,
+        AppendEntriesResponse,
+        InstallSnapshotRequest,
+        InstallSnapshotResponse>;
 
-}  // namespace cpr::raft
+    struct RaftMessage
+    {
+        RaftMessageType type = RaftMessageType::REQUEST_VOTE_REQUEST;
+        common::NodeId source_node_id = common::kInvalidNodeId;
+        common::NodeId target_node_id = common::kInvalidNodeId;
+        RaftMessagePayload payload = RequestVoteRequest{};
+    };
+
+} // namespace cpr::raft

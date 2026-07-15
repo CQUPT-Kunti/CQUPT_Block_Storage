@@ -1,0 +1,80 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 16,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "debug-ninja-low-parallel",
+      "displayName": "Debug Ninja low parallel",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/debug-ninja-low-parallel",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CPR_REQUIRE_ALL_DEPENDENCIES": "OFF"
+      }
+    },
+    {
+      "name": "debug-unix-makefiles",
+      "displayName": "Debug Unix Makefiles",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/debug-unix-makefiles",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CPR_REQUIRE_ALL_DEPENDENCIES": "OFF"
+      }
+    },
+    {
+      "name": "windows",
+      "displayName": "Windows Visual Studio 2022",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/windows",
+      "cacheVariables": {
+        "CPR_REQUIRE_ALL_DEPENDENCIES": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "debug-ninja-low-parallel",
+      "displayName": "Build Debug Ninja low parallel",
+      "configurePreset": "debug-ninja-low-parallel",
+      "jobs": 8
+    },
+    {
+      "name": "debug-unix-makefiles",
+      "displayName": "Build Debug Unix Makefiles",
+      "configurePreset": "debug-unix-makefiles",
+      "jobs": 8
+    },
+    {
+      "name": "windows-debug",
+      "displayName": "Windows Debug",
+      "configurePreset": "windows",
+      "configuration": "Debug",
+      "jobs": 8
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "debug-tests",
+      "displayName": "Run Debug tests",
+      "configurePreset": "debug-ninja-low-parallel",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-debug-tests",
+      "displayName": "Run Windows Debug tests",
+      "configurePreset": "windows",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

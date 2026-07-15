@@ -36,6 +36,19 @@ namespace cpr::raft
             }
         };
 
+        struct RaftOutput
+        {
+            bool has_hard_state = false;
+            HardState hard_state;
+            std::vector<LogEntry> unstable_entries;
+            std::vector<RaftMessage> immediate_messages;
+            std::vector<RaftMessage> persisted_messages;
+            ApplyRange committed_range;
+            RaftRole role = RaftRole::FOLLOWER;
+            common::Term term = common::kInitialTerm;
+            common::NodeId leader_id = common::kInvalidNodeId;
+        };
+
         enum class TickAction
         {
             NONE,
@@ -73,7 +86,7 @@ namespace cpr::raft
                                                  VoteResponseAction *action);
         common::Status BuildHeartbeat(AppendEntriesRequest *request) const;
         common::Status BuildAppendEntriesForPeer(common::NodeId target_node_id,
-                                                 AppendEntriesRequest *request) const;
+                                                 AppendEntriesRequest *request);
         common::Status HandleAppendEntries(const AppendEntriesRequest &request,
                                            AppendEntriesResponse *response);
         common::Status HandleAppendEntriesResponse(common::NodeId source_node_id,
@@ -82,6 +95,9 @@ namespace cpr::raft
         common::Status GetPeerProgress(common::NodeId target_node_id,
                                        PeerProgress *progress) const;
         common::Status GetApplyReadyRange(ApplyRange *range) const;
+        common::Status GetOutput(RaftOutput *output) const;
+        common::Status ConfirmPersistence(bool hard_state_persisted,
+                                          common::LogIndex stable_index);
 
         common::NodeId node_id() const noexcept;
         RaftRole role() const noexcept;
@@ -105,6 +121,7 @@ namespace cpr::raft
         common::Status RequireAppendResponseAction(AppendResponseAction *action) const;
         common::Status RequirePeerProgress(PeerProgress *progress) const;
         common::Status RequireApplyRange(ApplyRange *range) const;
+        common::Status RequireOutput(RaftOutput *output) const;
         common::Status ValidateRequestVoteRequest(const RequestVoteRequest &request) const;
         common::Status ValidateRequestVoteResponse(common::NodeId source_node_id,
                                                    const RequestVoteResponse &response) const;
@@ -115,12 +132,18 @@ namespace cpr::raft
         common::Status UpdateCurrentTerm(common::Term term);
         common::Status GetLastLogTerm(common::Term *term) const;
         common::Status TryAdvanceCommitIndex();
+        common::Status StageMessage(const RaftMessage &message,
+                                    bool require_hard_state,
+                                    common::LogIndex required_stable_index);
+        common::Status ReclassifyBlockedMessages();
         common::Status ResetPeerProgress();
         common::Status SyncLocalPeerProgress();
         common::Status FindPeerProgress(common::NodeId target_node_id,
                                         PeerProgress **progress);
         common::Status FindPeerProgress(common::NodeId target_node_id,
                                         const PeerProgress **progress) const;
+        bool HasDirtyHardState() const noexcept;
+        bool HardStateChanged() const noexcept;
         bool IsCandidateLogUpToDate(common::LogIndex last_log_index,
                                     common::Term last_log_term) const;
         common::LogIndex FindFirstIndexOfTerm(common::Term term,
@@ -140,6 +163,15 @@ namespace cpr::raft
         std::vector<common::NodeId> voter_ids_;
         std::vector<common::NodeId> learner_ids_;
         std::map<common::NodeId, PeerProgress> peer_progress_;
+        HardState persisted_hard_state_;
+        struct PendingMessage
+        {
+            RaftMessage message;
+            bool require_hard_state = false;
+            common::LogIndex required_stable_index = common::kInvalidLogIndex;
+        };
+        std::vector<RaftMessage> immediate_messages_;
+        std::vector<PendingMessage> persisted_messages_;
         bool initialized_ = false;
     };
 

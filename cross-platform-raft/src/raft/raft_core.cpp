@@ -26,6 +26,14 @@ namespace cpr::raft
             return std::find(nodes.begin(), nodes.end(), node_id) != nodes.end();
         }
 
+        bool SameHardState(const HardState &lhs, const HardState &rhs)
+        {
+            return lhs.current_term == rhs.current_term &&
+                   lhs.voted_for == rhs.voted_for &&
+                   lhs.commit_index == rhs.commit_index &&
+                   lhs.membership_configuration_id == rhs.membership_configuration_id;
+        }
+
         void ResetVoteResponse(RequestVoteResponse *response, Term term)
         {
             response->term = term;
@@ -62,8 +70,11 @@ namespace cpr::raft
         log_ = RaftLog();
         voter_ids_ = options.voter_ids;
         learner_ids_ = options.learner_ids;
+        immediate_messages_.clear();
+        persisted_messages_.clear();
         initialized_ = true;
         hard_state_.commit_index = log_.commit_index();
+        persisted_hard_state_ = hard_state_;
         status = ResetPeerProgress();
         if (!status.ok())
         {
@@ -185,43 +196,53 @@ namespace cpr::raft
             return status;
         }
 
+        const HardState before_hard_state = hard_state_;
         ResetVoteResponse(response, current_term());
         if (role_ == RaftRole::LEARNER)
         {
             response->reject_reason = VoteRejectReason::LEARNER;
-            return Status::OK();
         }
-        if (request.term < current_term())
+        else if (request.term < current_term())
         {
             response->reject_reason = VoteRejectReason::STALE_TERM;
-            return Status::OK();
         }
-        if (request.term > current_term())
+        else
         {
-            status = BecomeFollowerForRemote(request.term, common::kInvalidNodeId);
-            if (!status.ok())
+            if (request.term > current_term())
             {
-                return status;
+                status = BecomeFollowerForRemote(request.term, common::kInvalidNodeId);
+                if (!status.ok())
+                {
+                    return status;
+                }
+                response->term = current_term();
             }
-            response->term = current_term();
-        }
-        if (!IsCandidateLogUpToDate(request.last_log_index, request.last_log_term))
-        {
-            response->reject_reason = VoteRejectReason::LOG_OUTDATED;
-            return Status::OK();
-        }
-        if (hard_state_.voted_for != common::kInvalidNodeId &&
-            hard_state_.voted_for != request.candidate_id)
-        {
-            response->reject_reason = VoteRejectReason::ALREADY_VOTED;
-            return Status::OK();
+            if (!IsCandidateLogUpToDate(request.last_log_index, request.last_log_term))
+            {
+                response->reject_reason = VoteRejectReason::LOG_OUTDATED;
+            }
+            else if (hard_state_.voted_for != common::kInvalidNodeId &&
+                     hard_state_.voted_for != request.candidate_id)
+            {
+                response->reject_reason = VoteRejectReason::ALREADY_VOTED;
+            }
+            else
+            {
+                hard_state_.voted_for = request.candidate_id;
+                ResetElectionTicks();
+                response->vote_granted = true;
+                response->reject_reason = VoteRejectReason::NONE;
+            }
         }
 
-        hard_state_.voted_for = request.candidate_id;
-        ResetElectionTicks();
-        response->vote_granted = true;
-        response->reject_reason = VoteRejectReason::NONE;
-        return Status::OK();
+        RaftMessage message;
+        message.type = RaftMessageType::REQUEST_VOTE_RESPONSE;
+        message.source_node_id = node_id_;
+        message.target_node_id = request.candidate_id;
+        message.payload = *response;
+        return StageMessage(message,
+                            !SameHardState(before_hard_state, hard_state_),
+                            common::kInvalidLogIndex);
     }
 
     common::Status RaftCore::HandleRequestVoteResponse(NodeId source_node_id,
@@ -293,7 +314,7 @@ namespace cpr::raft
     }
 
     common::Status RaftCore::BuildAppendEntriesForPeer(common::NodeId target_node_id,
-                                                       AppendEntriesRequest *request) const
+                                                       AppendEntriesRequest *request)
     {
         Status status = RequireAppendEntriesRequest(request);
         if (!status.ok())
@@ -343,7 +364,15 @@ namespace cpr::raft
                 return status;
             }
         }
-        return Status::OK();
+        RaftMessage message;
+        message.type = RaftMessageType::APPEND_ENTRIES_REQUEST;
+        message.source_node_id = node_id_;
+        message.target_node_id = target_node_id;
+        message.payload = *request;
+        const LogIndex required_stable_index = request->entries.empty()
+                                                   ? common::kInvalidLogIndex
+                                                   : request->entries.back().index;
+        return StageMessage(message, HasDirtyHardState(), required_stable_index);
     }
 
     common::Status RaftCore::HandleAppendEntries(const AppendEntriesRequest &request,
@@ -360,10 +389,17 @@ namespace cpr::raft
             return status;
         }
 
+        const HardState before_hard_state = hard_state_;
+        const LogIndex before_last_index = log_.last_index();
         ResetAppendResponse(response, current_term());
         if (request.term < current_term())
         {
-            return Status::OK();
+            RaftMessage message;
+            message.type = RaftMessageType::APPEND_ENTRIES_RESPONSE;
+            message.source_node_id = node_id_;
+            message.target_node_id = request.leader_id;
+            message.payload = *response;
+            return StageMessage(message, false, common::kInvalidLogIndex);
         }
         if (request.term > current_term())
         {
@@ -379,7 +415,14 @@ namespace cpr::raft
         }
         else if (role_ == RaftRole::LEADER && request.leader_id != node_id_)
         {
-            return Status::OK();
+            RaftMessage message;
+            message.type = RaftMessageType::APPEND_ENTRIES_RESPONSE;
+            message.source_node_id = node_id_;
+            message.target_node_id = request.leader_id;
+            message.payload = *response;
+            return StageMessage(message,
+                                !SameHardState(before_hard_state, hard_state_),
+                                common::kInvalidLogIndex);
         }
 
         leader_id_ = request.leader_id;
@@ -392,25 +435,38 @@ namespace cpr::raft
             if (request.prev_log_index > log_.last_index())
             {
                 response->conflict_index = log_.last_index() + 1;
-                return Status::OK();
             }
-
-            Term conflict_term = common::kInitialTerm;
-            status = log_.GetTerm(request.prev_log_index, &conflict_term);
-            if (!status.ok())
+            else
             {
-                if (request.prev_log_index < log_.first_index())
+                Term conflict_term = common::kInitialTerm;
+                status = log_.GetTerm(request.prev_log_index, &conflict_term);
+                if (!status.ok())
                 {
-                    response->conflict_index = log_.first_index();
-                    response->conflict_term = log_.snapshot_term();
-                    return Status::OK();
+                    if (request.prev_log_index < log_.first_index())
+                    {
+                        response->conflict_index = log_.first_index();
+                        response->conflict_term = log_.snapshot_term();
+                    }
+                    else
+                    {
+                        return status;
+                    }
                 }
-                return status;
+                else
+                {
+                    response->conflict_term = conflict_term;
+                    response->conflict_index = FindFirstIndexOfTerm(conflict_term, request.prev_log_index);
+                }
             }
 
-            response->conflict_term = conflict_term;
-            response->conflict_index = FindFirstIndexOfTerm(conflict_term, request.prev_log_index);
-            return Status::OK();
+            RaftMessage message;
+            message.type = RaftMessageType::APPEND_ENTRIES_RESPONSE;
+            message.source_node_id = node_id_;
+            message.target_node_id = request.leader_id;
+            message.payload = *response;
+            return StageMessage(message,
+                                !SameHardState(before_hard_state, hard_state_),
+                                common::kInvalidLogIndex);
         }
 
         if (!request.entries.empty())
@@ -461,7 +517,16 @@ namespace cpr::raft
 
         response->success = true;
         response->match_index = log_.last_index();
-        return Status::OK();
+
+        RaftMessage message;
+        message.type = RaftMessageType::APPEND_ENTRIES_RESPONSE;
+        message.source_node_id = node_id_;
+        message.target_node_id = request.leader_id;
+        message.payload = *response;
+        return StageMessage(message,
+                            !SameHardState(before_hard_state, hard_state_),
+                            log_.last_index() > before_last_index ? log_.last_index()
+                                                                  : common::kInvalidLogIndex);
     }
 
     common::Status RaftCore::HandleAppendEntriesResponse(NodeId source_node_id,
@@ -582,6 +647,76 @@ namespace cpr::raft
         range->begin = log_.applied_index() + 1;
         range->end = log_.commit_index();
         return Status::OK();
+    }
+
+    common::Status RaftCore::GetOutput(RaftOutput *output) const
+    {
+        Status status = RequireOutput(output);
+        if (!status.ok())
+        {
+            return status;
+        }
+
+        output->has_hard_state = HardStateChanged();
+        output->hard_state = hard_state_;
+        output->unstable_entries.clear();
+        if (log_.stable_index() < log_.last_index())
+        {
+            status = log_.GetEntries(log_.stable_index() + 1,
+                                     log_.last_index() + 1,
+                                     &output->unstable_entries);
+            if (!status.ok())
+            {
+                return status;
+            }
+        }
+        output->immediate_messages = immediate_messages_;
+        output->persisted_messages.clear();
+        output->persisted_messages.reserve(persisted_messages_.size());
+        for (const PendingMessage &pending : persisted_messages_)
+        {
+            output->persisted_messages.push_back(pending.message);
+        }
+        status = GetApplyReadyRange(&output->committed_range);
+        if (!status.ok())
+        {
+            return status;
+        }
+        output->role = role_;
+        output->term = current_term();
+        output->leader_id = leader_id_;
+        return Status::OK();
+    }
+
+    common::Status RaftCore::ConfirmPersistence(bool hard_state_persisted,
+                                                LogIndex stable_index)
+    {
+        if (!initialized_)
+        {
+            return MakeInvalid("raft core is not initialized");
+        }
+        if (stable_index < log_.stable_index())
+        {
+            return MakeInvalid("stable index cannot move backward");
+        }
+        if (stable_index > log_.last_index())
+        {
+            return MakeInvalid("stable index cannot exceed last index");
+        }
+
+        if (hard_state_persisted)
+        {
+            persisted_hard_state_ = hard_state_;
+        }
+        if (stable_index > log_.stable_index())
+        {
+            Status status = log_.AdvanceStableTo(stable_index);
+            if (!status.ok())
+            {
+                return status;
+            }
+        }
+        return ReclassifyBlockedMessages();
     }
 
     common::NodeId RaftCore::node_id() const noexcept
@@ -816,6 +951,19 @@ namespace cpr::raft
         return Status::OK();
     }
 
+    common::Status RaftCore::RequireOutput(RaftOutput *output) const
+    {
+        if (!initialized_)
+        {
+            return MakeInvalid("raft core is not initialized");
+        }
+        if (output == nullptr)
+        {
+            return MakeInvalid("raft output pointer must not be null");
+        }
+        return Status::OK();
+    }
+
     common::Status RaftCore::ValidateRequestVoteRequest(const RequestVoteRequest &request) const
     {
         if (!initialized_)
@@ -982,6 +1130,72 @@ namespace cpr::raft
         return Status::OK();
     }
 
+    common::Status RaftCore::StageMessage(const RaftMessage &message,
+                                          bool require_hard_state,
+                                          LogIndex required_stable_index)
+    {
+        const bool has_log_dependency = required_stable_index > log_.stable_index();
+        const bool has_hard_state_dependency = require_hard_state && HasDirtyHardState();
+
+        auto same_message = [&message](const auto &entry)
+        {
+            return entry.message.type == message.type &&
+                   entry.message.target_node_id == message.target_node_id;
+        };
+
+        immediate_messages_.erase(
+            std::remove_if(immediate_messages_.begin(),
+                           immediate_messages_.end(),
+                           [&message](const RaftMessage &entry)
+                           {
+                               return entry.type == message.type &&
+                                      entry.target_node_id == message.target_node_id;
+                           }),
+            immediate_messages_.end());
+        persisted_messages_.erase(
+            std::remove_if(persisted_messages_.begin(),
+                           persisted_messages_.end(),
+                           same_message),
+            persisted_messages_.end());
+
+        if (has_hard_state_dependency || has_log_dependency)
+        {
+            PendingMessage pending;
+            pending.message = message;
+            pending.require_hard_state = has_hard_state_dependency;
+            pending.required_stable_index = has_log_dependency ? required_stable_index
+                                                               : common::kInvalidLogIndex;
+            persisted_messages_.push_back(std::move(pending));
+        }
+        else
+        {
+            immediate_messages_.push_back(message);
+        }
+        return Status::OK();
+    }
+
+    common::Status RaftCore::ReclassifyBlockedMessages()
+    {
+        std::vector<PendingMessage> remaining;
+        remaining.reserve(persisted_messages_.size());
+        for (const PendingMessage &pending : persisted_messages_)
+        {
+            const bool hard_state_ready = !pending.require_hard_state || !HasDirtyHardState();
+            const bool logs_ready = pending.required_stable_index == common::kInvalidLogIndex ||
+                                    pending.required_stable_index <= log_.stable_index();
+            if (hard_state_ready && logs_ready)
+            {
+                immediate_messages_.push_back(pending.message);
+            }
+            else
+            {
+                remaining.push_back(pending);
+            }
+        }
+        persisted_messages_ = std::move(remaining);
+        return Status::OK();
+    }
+
     common::Status RaftCore::ResetPeerProgress()
     {
         peer_progress_.clear();
@@ -1055,6 +1269,16 @@ namespace cpr::raft
         }
         *progress = &it->second;
         return Status::OK();
+    }
+
+    bool RaftCore::HasDirtyHardState() const noexcept
+    {
+        return !SameHardState(hard_state_, persisted_hard_state_);
+    }
+
+    bool RaftCore::HardStateChanged() const noexcept
+    {
+        return HasDirtyHardState();
     }
 
     bool RaftCore::IsCandidateLogUpToDate(LogIndex last_log_index,

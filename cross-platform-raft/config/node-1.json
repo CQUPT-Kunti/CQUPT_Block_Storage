@@ -1,0 +1,55 @@
+{
+  "node_id": "node-1",
+  "ip_address": "127.0.0.1",
+  "raft_port": 7101,
+  "metadata_port": 7201,
+  "store_control_port": 7301,
+  "initial_members": [
+    {
+      "node_id": "node-1",
+      "ip_address": "127.0.0.1",
+      "raft_port": 7101,
+      "metadata_port": 7201,
+      "store_control_port": 7301,
+      "role": "VOTER"
+    },
+    {
+      "node_id": "node-2",
+      "ip_address": "127.0.0.1",
+      "raft_port": 7102,
+      "metadata_port": 7202,
+      "store_control_port": 7302,
+      "role": "VOTER"
+    },
+    {
+      "node_id": "node-3",
+      "ip_address": "127.0.0.1",
+      "raft_port": 7103,
+      "metadata_port": 7203,
+      "store_control_port": 7303,
+      "role": "VOTER"
+    },
+    {
+      "node_id": "node-4",
+      "ip_address": "127.0.0.1",
+      "raft_port": 7104,
+      "metadata_port": 7204,
+      "store_control_port": 7304,
+      "role": "LEARNER"
+    }
+  ],
+  "heartbeat_interval_ms": 150,
+  "election_timeout_min_ms": 500,
+  "election_timeout_max_ms": 900,
+  "rpc_timeout_ms": 1000,
+  "queue_capacity": 1024,
+  "worker_count": 4,
+  "max_message_size": 4194304,
+  "log_batch_size": 128,
+  "data_directory": "data/node-1",
+  "snapshot_directory": "data/node-1/snapshots",
+  "store_heartbeat_timeout_ms": 3000,
+  "failure_detection_interval_ms": 1000,
+  "task_poll_limit": 64,
+  "log_level": "INFO"
+}

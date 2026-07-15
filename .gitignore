@@ -2,3 +2,5 @@
 /.agents
 /.codegraph
 /.specify
+/cross-platform-raft/build
+/tmp/test-logs

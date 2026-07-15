@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <set>
 #include <string>
 #include <utility>
 
@@ -18,6 +19,11 @@ namespace cpr::raft
         Status MakeInvalid(std::string message)
         {
             return Status::InvalidArgument(std::move(message));
+        }
+
+        bool ContainsNode(const std::vector<NodeId> &nodes, NodeId node_id)
+        {
+            return std::find(nodes.begin(), nodes.end(), node_id) != nodes.end();
         }
 
         void ResetVoteResponse(RequestVoteResponse *response, Term term)
@@ -48,13 +54,22 @@ namespace cpr::raft
 
         node_id_ = options.node_id;
         role_ = options.initial_role;
-        leader_id_ = common::kInvalidNodeId;
+        leader_id_ = role_ == RaftRole::LEADER ? node_id_ : common::kInvalidNodeId;
         logical_ticks_ = 0;
         election_elapsed_ticks_ = 0;
         election_timeout_ticks_ = options.election_timeout_ticks;
         hard_state_ = options.hard_state;
         log_ = RaftLog();
+        voter_ids_ = options.voter_ids;
+        learner_ids_ = options.learner_ids;
         initialized_ = true;
+        hard_state_.commit_index = log_.commit_index();
+        status = ResetPeerProgress();
+        if (!status.ok())
+        {
+            initialized_ = false;
+            return status;
+        }
         return Status::OK();
     }
 
@@ -153,7 +168,7 @@ namespace cpr::raft
         role_ = RaftRole::LEADER;
         leader_id_ = node_id_;
         ResetElectionTicks();
-        return Status::OK();
+        return ResetPeerProgress();
     }
 
     common::Status RaftCore::HandleRequestVote(const RequestVoteRequest &request,
@@ -277,6 +292,60 @@ namespace cpr::raft
         return Status::OK();
     }
 
+    common::Status RaftCore::BuildAppendEntriesForPeer(common::NodeId target_node_id,
+                                                       AppendEntriesRequest *request) const
+    {
+        Status status = RequireAppendEntriesRequest(request);
+        if (!status.ok())
+        {
+            return status;
+        }
+        if (role_ != RaftRole::LEADER)
+        {
+            return MakeInvalid("only a leader can build append entries");
+        }
+        if (target_node_id == node_id_)
+        {
+            return MakeInvalid("append entries target must not be the local node");
+        }
+
+        const PeerProgress *progress = nullptr;
+        status = FindPeerProgress(target_node_id, &progress);
+        if (!status.ok())
+        {
+            return status;
+        }
+        if (progress->next_index <= log_.snapshot_index())
+        {
+            return Status::RetryLater("peer requires snapshot before append entries can be built");
+        }
+
+        Term prev_term = common::kInitialTerm;
+        status = log_.GetTerm(progress->next_index - 1, &prev_term);
+        if (!status.ok())
+        {
+            return status;
+        }
+
+        request->term = current_term();
+        request->leader_id = node_id_;
+        request->prev_log_index = progress->next_index - 1;
+        request->prev_log_term = prev_term;
+        request->leader_commit = log_.commit_index();
+        request->entries.clear();
+        if (progress->next_index <= log_.last_index())
+        {
+            status = log_.GetEntries(progress->next_index,
+                                     log_.last_index() + 1,
+                                     &request->entries);
+            if (!status.ok())
+            {
+                return status;
+            }
+        }
+        return Status::OK();
+    }
+
     common::Status RaftCore::HandleAppendEntries(const AppendEntriesRequest &request,
                                                  AppendEntriesResponse *response)
     {
@@ -381,6 +450,13 @@ namespace cpr::raft
             {
                 return status;
             }
+            hard_state_.commit_index = log_.commit_index();
+        }
+
+        status = SyncLocalPeerProgress();
+        if (!status.ok())
+        {
+            return status;
         }
 
         response->success = true;
@@ -434,8 +510,77 @@ namespace cpr::raft
             return Status::OK();
         }
 
-        *action = response.success ? AppendResponseAction::ACCEPTED
-                                   : AppendResponseAction::REJECTED;
+        PeerProgress *progress = nullptr;
+        status = FindPeerProgress(source_node_id, &progress);
+        if (!status.ok())
+        {
+            return status;
+        }
+
+        progress->is_active = true;
+        if (response.success)
+        {
+            if (response.match_index > log_.last_index())
+            {
+                return MakeInvalid("append response match index exceeds local last index");
+            }
+            if (response.match_index > progress->match_index)
+            {
+                progress->match_index = response.match_index;
+            }
+            progress->next_index = std::max(progress->next_index, progress->match_index + 1);
+            status = TryAdvanceCommitIndex();
+            if (!status.ok())
+            {
+                return status;
+            }
+            *action = AppendResponseAction::ACCEPTED;
+            return Status::OK();
+        }
+
+        LogIndex next_index = response.conflict_index;
+        if (response.conflict_term != common::kInitialTerm)
+        {
+            const LogIndex local_index = FindLastIndexOfTerm(response.conflict_term);
+            if (local_index != common::kInvalidLogIndex)
+            {
+                next_index = local_index + 1;
+            }
+        }
+        next_index = ClampPeerNextIndex(next_index);
+        progress->next_index = std::min(progress->next_index, next_index);
+        *action = AppendResponseAction::REJECTED;
+        return Status::OK();
+    }
+
+    common::Status RaftCore::GetPeerProgress(common::NodeId target_node_id,
+                                             PeerProgress *progress) const
+    {
+        Status status = RequirePeerProgress(progress);
+        if (!status.ok())
+        {
+            return status;
+        }
+
+        const PeerProgress *current = nullptr;
+        status = FindPeerProgress(target_node_id, &current);
+        if (!status.ok())
+        {
+            return status;
+        }
+        *progress = *current;
+        return Status::OK();
+    }
+
+    common::Status RaftCore::GetApplyReadyRange(ApplyRange *range) const
+    {
+        Status status = RequireApplyRange(range);
+        if (!status.ok())
+        {
+            return status;
+        }
+        range->begin = log_.applied_index() + 1;
+        range->end = log_.commit_index();
         return Status::OK();
     }
 
@@ -498,6 +643,53 @@ namespace cpr::raft
         if (options.election_timeout_ticks == 0)
         {
             return MakeInvalid("election timeout ticks must be greater than zero");
+        }
+        if (options.voter_ids.empty())
+        {
+            return MakeInvalid("at least one voter is required");
+        }
+
+        std::set<NodeId> seen;
+        for (NodeId node_id : options.voter_ids)
+        {
+            if (node_id == common::kInvalidNodeId)
+            {
+                return MakeInvalid("voter id must be valid");
+            }
+            if (!seen.insert(node_id).second)
+            {
+                return MakeInvalid("duplicate node id exists in member sets");
+            }
+        }
+        for (NodeId node_id : options.learner_ids)
+        {
+            if (node_id == common::kInvalidNodeId)
+            {
+                return MakeInvalid("learner id must be valid");
+            }
+            if (!seen.insert(node_id).second)
+            {
+                return MakeInvalid("duplicate node id exists in member sets");
+            }
+        }
+
+        const bool is_voter = ContainsNode(options.voter_ids, options.node_id);
+        const bool is_learner = ContainsNode(options.learner_ids, options.node_id);
+        if (!is_voter && !is_learner)
+        {
+            return MakeInvalid("current node must exist in the member set");
+        }
+        if (is_learner && options.initial_role != RaftRole::LEARNER)
+        {
+            return MakeInvalid("learner node must initialize as learner");
+        }
+        if (is_voter && options.initial_role == RaftRole::LEARNER)
+        {
+            return MakeInvalid("voter node cannot initialize as learner");
+        }
+        if (options.initial_role == RaftRole::LEADER && !is_voter)
+        {
+            return MakeInvalid("learner cannot initialize as leader");
         }
         if (options.initial_role == RaftRole::LEARNER &&
             options.hard_state.voted_for == options.node_id)
@@ -598,6 +790,32 @@ namespace cpr::raft
         return Status::OK();
     }
 
+    common::Status RaftCore::RequirePeerProgress(PeerProgress *progress) const
+    {
+        if (!initialized_)
+        {
+            return MakeInvalid("raft core is not initialized");
+        }
+        if (progress == nullptr)
+        {
+            return MakeInvalid("peer progress output pointer must not be null");
+        }
+        return Status::OK();
+    }
+
+    common::Status RaftCore::RequireApplyRange(ApplyRange *range) const
+    {
+        if (!initialized_)
+        {
+            return MakeInvalid("raft core is not initialized");
+        }
+        if (range == nullptr)
+        {
+            return MakeInvalid("apply range output pointer must not be null");
+        }
+        return Status::OK();
+    }
+
     common::Status RaftCore::ValidateRequestVoteRequest(const RequestVoteRequest &request) const
     {
         if (!initialized_)
@@ -662,10 +880,22 @@ namespace cpr::raft
         {
             return MakeInvalid("source node id must be valid");
         }
-        if (response.success && response.match_index == common::kInvalidLogIndex &&
+        if (!ContainsNode(voter_ids_, source_node_id) &&
+            !ContainsNode(learner_ids_, source_node_id))
+        {
+            return MakeInvalid("source node id is not in the member set");
+        }
+        if (response.success &&
+            response.match_index == common::kInvalidLogIndex &&
             log_.last_index() != common::kInvalidLogIndex)
         {
             return MakeInvalid("successful append response must include a match index");
+        }
+        if (!response.success &&
+            response.term == current_term() &&
+            response.conflict_index == common::kInvalidLogIndex)
+        {
+            return MakeInvalid("failed append response must include a conflict index");
         }
         return Status::OK();
     }
@@ -710,7 +940,125 @@ namespace cpr::raft
         return log_.GetTerm(log_.last_index(), term);
     }
 
-    bool RaftCore::IsCandidateLogUpToDate(LogIndex last_log_index, Term last_log_term) const
+    common::Status RaftCore::TryAdvanceCommitIndex()
+    {
+        std::vector<LogIndex> matches;
+        matches.reserve(voter_ids_.size());
+        for (NodeId node_id : voter_ids_)
+        {
+            const PeerProgress *progress = nullptr;
+            Status status = FindPeerProgress(node_id, &progress);
+            if (!status.ok())
+            {
+                return status;
+            }
+            matches.push_back(progress->match_index);
+        }
+
+        std::sort(matches.begin(), matches.end());
+        const LogIndex candidate = matches[matches.size() / 2];
+        if (candidate <= log_.commit_index())
+        {
+            return Status::OK();
+        }
+
+        Term candidate_term = common::kInitialTerm;
+        Status status = log_.GetTerm(candidate, &candidate_term);
+        if (!status.ok())
+        {
+            return status;
+        }
+        if (candidate_term != current_term())
+        {
+            return Status::OK();
+        }
+
+        status = log_.AdvanceCommitTo(candidate);
+        if (!status.ok())
+        {
+            return status;
+        }
+        hard_state_.commit_index = log_.commit_index();
+        return Status::OK();
+    }
+
+    common::Status RaftCore::ResetPeerProgress()
+    {
+        peer_progress_.clear();
+        const LogIndex last_index = log_.last_index();
+        const LogIndex next_index = last_index + 1;
+
+        for (NodeId node_id : voter_ids_)
+        {
+            PeerProgress progress;
+            progress.node_id = node_id;
+            progress.is_learner = false;
+            progress.is_active = node_id == node_id_;
+            progress.match_index = node_id == node_id_ ? last_index : common::kInvalidLogIndex;
+            progress.next_index = next_index;
+            peer_progress_.emplace(node_id, progress);
+        }
+        for (NodeId node_id : learner_ids_)
+        {
+            PeerProgress progress;
+            progress.node_id = node_id;
+            progress.is_learner = true;
+            progress.is_active = node_id == node_id_;
+            progress.match_index = node_id == node_id_ ? last_index : common::kInvalidLogIndex;
+            progress.next_index = next_index;
+            peer_progress_.emplace(node_id, progress);
+        }
+        return SyncLocalPeerProgress();
+    }
+
+    common::Status RaftCore::SyncLocalPeerProgress()
+    {
+        PeerProgress *progress = nullptr;
+        Status status = FindPeerProgress(node_id_, &progress);
+        if (!status.ok())
+        {
+            return status;
+        }
+        progress->is_active = true;
+        progress->match_index = log_.last_index();
+        progress->next_index = log_.last_index() + 1;
+        return Status::OK();
+    }
+
+    common::Status RaftCore::FindPeerProgress(common::NodeId target_node_id,
+                                              PeerProgress **progress)
+    {
+        if (progress == nullptr)
+        {
+            return MakeInvalid("peer progress pointer must not be null");
+        }
+        auto it = peer_progress_.find(target_node_id);
+        if (it == peer_progress_.end())
+        {
+            return Status::NotFound("peer progress not found for node " + std::to_string(target_node_id));
+        }
+        *progress = &it->second;
+        return Status::OK();
+    }
+
+    common::Status RaftCore::FindPeerProgress(common::NodeId target_node_id,
+                                              const PeerProgress **progress) const
+    {
+        if (progress == nullptr)
+        {
+            return MakeInvalid("peer progress pointer must not be null");
+        }
+        auto it = peer_progress_.find(target_node_id);
+        if (it == peer_progress_.end())
+        {
+            return Status::NotFound("peer progress not found for node " + std::to_string(target_node_id));
+        }
+        *progress = &it->second;
+        return Status::OK();
+    }
+
+    bool RaftCore::IsCandidateLogUpToDate(LogIndex last_log_index,
+                                          Term last_log_term) const
     {
         Term local_last_term = common::kInitialTerm;
         if (!GetLastLogTerm(&local_last_term).ok())
@@ -724,7 +1072,8 @@ namespace cpr::raft
         return last_log_index >= log_.last_index();
     }
 
-    LogIndex RaftCore::FindFirstIndexOfTerm(Term term, LogIndex hint_index) const
+    LogIndex RaftCore::FindFirstIndexOfTerm(Term term,
+                                            LogIndex hint_index) const
     {
         if (hint_index == log_.snapshot_index() && term == log_.snapshot_term())
         {
@@ -741,6 +1090,48 @@ namespace cpr::raft
             --index;
         }
         return index + 1;
+    }
+
+    LogIndex RaftCore::FindLastIndexOfTerm(Term term) const
+    {
+        for (LogIndex index = log_.last_index(); index > log_.snapshot_index(); --index)
+        {
+            Term current = common::kInitialTerm;
+            if (!log_.GetTerm(index, &current).ok())
+            {
+                break;
+            }
+            if (current == term)
+            {
+                return index;
+            }
+            if (current < term)
+            {
+                break;
+            }
+        }
+        if (term == log_.snapshot_term())
+        {
+            return log_.snapshot_index();
+        }
+        return common::kInvalidLogIndex;
+    }
+
+    LogIndex RaftCore::ClampPeerNextIndex(LogIndex index) const noexcept
+    {
+        const LogIndex minimum = log_.snapshot_index() > common::kInvalidLogIndex
+                                     ? log_.snapshot_index()
+                                     : log_.first_index();
+        const LogIndex maximum = log_.last_index() + 1;
+        if (index < minimum)
+        {
+            return minimum;
+        }
+        if (index > maximum)
+        {
+            return maximum;
+        }
+        return index;
     }
 
     void RaftCore::ResetElectionTicks() noexcept

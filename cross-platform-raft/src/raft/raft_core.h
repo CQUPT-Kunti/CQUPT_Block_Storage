@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
+#include <vector>
 
 #include "common/status.h"
 #include "raft/raft_log.h"
@@ -19,6 +21,19 @@ namespace cpr::raft
             RaftRole initial_role = RaftRole::FOLLOWER;
             std::uint64_t election_timeout_ticks = 0;
             HardState hard_state;
+            std::vector<common::NodeId> voter_ids;
+            std::vector<common::NodeId> learner_ids;
+        };
+
+        struct ApplyRange
+        {
+            common::LogIndex begin = 1;
+            common::LogIndex end = 0;
+
+            bool empty() const noexcept
+            {
+                return begin > end;
+            }
         };
 
         enum class TickAction
@@ -57,11 +72,16 @@ namespace cpr::raft
                                                  const RequestVoteResponse &response,
                                                  VoteResponseAction *action);
         common::Status BuildHeartbeat(AppendEntriesRequest *request) const;
+        common::Status BuildAppendEntriesForPeer(common::NodeId target_node_id,
+                                                 AppendEntriesRequest *request) const;
         common::Status HandleAppendEntries(const AppendEntriesRequest &request,
                                            AppendEntriesResponse *response);
         common::Status HandleAppendEntriesResponse(common::NodeId source_node_id,
                                                    const AppendEntriesResponse &response,
                                                    AppendResponseAction *action);
+        common::Status GetPeerProgress(common::NodeId target_node_id,
+                                       PeerProgress *progress) const;
+        common::Status GetApplyReadyRange(ApplyRange *range) const;
 
         common::NodeId node_id() const noexcept;
         RaftRole role() const noexcept;
@@ -83,6 +103,8 @@ namespace cpr::raft
         common::Status RequireAppendEntriesRequest(AppendEntriesRequest *request) const;
         common::Status RequireAppendEntriesResponse(AppendEntriesResponse *response) const;
         common::Status RequireAppendResponseAction(AppendResponseAction *action) const;
+        common::Status RequirePeerProgress(PeerProgress *progress) const;
+        common::Status RequireApplyRange(ApplyRange *range) const;
         common::Status ValidateRequestVoteRequest(const RequestVoteRequest &request) const;
         common::Status ValidateRequestVoteResponse(common::NodeId source_node_id,
                                                    const RequestVoteResponse &response) const;
@@ -92,10 +114,19 @@ namespace cpr::raft
         common::Status BecomeFollowerForRemote(common::Term term, common::NodeId leader_id);
         common::Status UpdateCurrentTerm(common::Term term);
         common::Status GetLastLogTerm(common::Term *term) const;
+        common::Status TryAdvanceCommitIndex();
+        common::Status ResetPeerProgress();
+        common::Status SyncLocalPeerProgress();
+        common::Status FindPeerProgress(common::NodeId target_node_id,
+                                        PeerProgress **progress);
+        common::Status FindPeerProgress(common::NodeId target_node_id,
+                                        const PeerProgress **progress) const;
         bool IsCandidateLogUpToDate(common::LogIndex last_log_index,
                                     common::Term last_log_term) const;
         common::LogIndex FindFirstIndexOfTerm(common::Term term,
                                               common::LogIndex hint_index) const;
+        common::LogIndex FindLastIndexOfTerm(common::Term term) const;
+        common::LogIndex ClampPeerNextIndex(common::LogIndex index) const noexcept;
         void ResetElectionTicks() noexcept;
 
         common::NodeId node_id_ = common::kInvalidNodeId;
@@ -106,6 +137,9 @@ namespace cpr::raft
         std::uint64_t election_timeout_ticks_ = 0;
         HardState hard_state_;
         RaftLog log_;
+        std::vector<common::NodeId> voter_ids_;
+        std::vector<common::NodeId> learner_ids_;
+        std::map<common::NodeId, PeerProgress> peer_progress_;
         bool initialized_ = false;
     };
 

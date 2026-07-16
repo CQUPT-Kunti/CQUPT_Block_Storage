@@ -157,7 +157,7 @@
   - Done: gRPC-style callers can only enqueue work; they cannot mutate RaftCore.
   - Parallel: No.
 
-- [ ] T023 [US1] P5-T03 Implement ordered apply worker and Proposal result notification in `cross-platform-raft/src/raft/raft_runtime.cpp`
+- [X] T023 [US1] P5-T03 Implement ordered apply worker and Proposal result notification in `cross-platform-raft/src/raft/raft_runtime.cpp`
   - Scope: Apply committed entries in LogIndex order, prevent duplicate application, correlate Proposal completion, and return client success only after commit and apply complete.
   - Dependencies: T022.
   - Done: Runtime never returns proposal success for entries that are only in memory or only on local leader disk.

@@ -213,9 +213,36 @@ namespace cpr::raft
             it->second.next_index = entry.index + 1;
         }
 
-        // Proposal does not advance commit index or notify client —
-        // that requires quorum replication (T013) and apply (T023).
+        // Check if the new entry can be committed (e.g. single-node majority).
+        status = TryAdvanceCommitIndex();
+        if (!status.ok())
+        {
+            return status;
+        }
+
         return Status::OK();
+    }
+
+    common::Status RaftCore::ConfirmApplied(common::LogIndex index)
+    {
+        if (!initialized_)
+        {
+            return MakeInvalid("raft core is not initialized");
+        }
+        if (index == common::kInvalidLogIndex)
+        {
+            return MakeInvalid("applied index must be positive");
+        }
+        if (index != log_.applied_index() + 1)
+        {
+            return MakeInvalid(
+                "confirm applied index must be the next expected index");
+        }
+        if (index > log_.commit_index())
+        {
+            return MakeInvalid("applied index cannot exceed commit index");
+        }
+        return log_.AdvanceAppliedTo(index);
     }
 
     common::Status RaftCore::HandleRequestVote(const RequestVoteRequest &request,

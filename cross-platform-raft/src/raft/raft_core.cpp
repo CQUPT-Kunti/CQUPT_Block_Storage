@@ -660,6 +660,9 @@ namespace cpr::raft
         output->has_hard_state = HardStateChanged();
         output->hard_state = hard_state_;
         output->unstable_entries.clear();
+        output->persistence = PersistenceRequirement{};
+        output->persistence.has_hard_state = output->has_hard_state;
+        output->persistence.hard_state = hard_state_;
         if (log_.stable_index() < log_.last_index())
         {
             status = log_.GetEntries(log_.stable_index() + 1,
@@ -669,6 +672,8 @@ namespace cpr::raft
             {
                 return status;
             }
+            output->persistence.first_log_index = output->unstable_entries.front().index;
+            output->persistence.last_log_index = output->unstable_entries.back().index;
         }
         output->immediate_messages = immediate_messages_;
         output->persisted_messages.clear();
@@ -688,13 +693,17 @@ namespace cpr::raft
         return Status::OK();
     }
 
-    common::Status RaftCore::ConfirmPersistence(bool hard_state_persisted,
-                                                LogIndex stable_index)
+    common::Status RaftCore::ConfirmPersistence(const PersistenceConfirmation &confirmation)
     {
         if (!initialized_)
         {
             return MakeInvalid("raft core is not initialized");
         }
+        if (!confirmation.status.ok())
+        {
+            return confirmation.status;
+        }
+        const LogIndex stable_index = confirmation.stable_index;
         if (stable_index < log_.stable_index())
         {
             return MakeInvalid("stable index cannot move backward");
@@ -703,8 +712,13 @@ namespace cpr::raft
         {
             return MakeInvalid("stable index cannot exceed last index");
         }
+        if (confirmation.max_stable_index != common::kInvalidLogIndex &&
+            stable_index > confirmation.max_stable_index)
+        {
+            return MakeInvalid("stable index exceeds confirmed persistence batch");
+        }
 
-        if (hard_state_persisted)
+        if (confirmation.hard_state_persisted)
         {
             persisted_hard_state_ = hard_state_;
         }
@@ -717,6 +731,16 @@ namespace cpr::raft
             }
         }
         return ReclassifyBlockedMessages();
+    }
+
+    common::Status RaftCore::ConfirmPersistence(bool hard_state_persisted,
+                                                LogIndex stable_index)
+    {
+        PersistenceConfirmation confirmation;
+        confirmation.hard_state_persisted = hard_state_persisted;
+        confirmation.stable_index = stable_index;
+        confirmation.max_stable_index = stable_index;
+        return ConfirmPersistence(confirmation);
     }
 
     common::NodeId RaftCore::node_id() const noexcept

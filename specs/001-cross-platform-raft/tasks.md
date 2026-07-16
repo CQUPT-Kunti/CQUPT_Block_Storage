@@ -129,7 +129,7 @@
   - Done: Incomplete tails are recovered safely, checksum errors are explicit corruption, and snapshot boundaries remain compatible with RaftLog.
   - Parallel: No.
 
-- [ ] T019 [US1] P4-T04 Document and enforce persistence gating between RaftCore, Runtime, and Storage in `cross-platform-raft/src/raft/raft_storage.h` and `cross-platform-raft/src/raft/raft_core.h`
+- [X] T019 [US1] P4-T04 Document and enforce persistence gating between RaftCore, Runtime, and Storage in `cross-platform-raft/src/raft/raft_storage.h` and `cross-platform-raft/src/raft/raft_core.h`
   - Scope: Capture that HardState/log data required by outgoing messages or successful responses must persist before those messages/responses are released.
   - Dependencies: T014, T018.
   - Done: Interfaces expose enough result metadata for Runtime to gate messages and client success without returning success for memory-only or leader-local-disk-only entries.

@@ -36,13 +36,38 @@ namespace cpr::raft
             }
         };
 
+        struct PersistenceRequirement
+        {
+            bool has_hard_state = false;
+            HardState hard_state;
+            common::LogIndex first_log_index = common::kInvalidLogIndex;
+            common::LogIndex last_log_index = common::kInvalidLogIndex;
+
+            bool has_log_entries() const noexcept
+            {
+                return first_log_index != common::kInvalidLogIndex &&
+                       last_log_index >= first_log_index;
+            }
+        };
+
+        // Runtime must call ConfirmPersistence only after Storage reports success.
+        struct PersistenceConfirmation
+        {
+            common::Status status;
+            bool hard_state_persisted = false;
+            common::LogIndex stable_index = common::kInvalidLogIndex;
+            common::LogIndex max_stable_index = common::kInvalidLogIndex;
+        };
+
         struct RaftOutput
         {
             bool has_hard_state = false;
             HardState hard_state;
             std::vector<LogEntry> unstable_entries;
+            PersistenceRequirement persistence;
             std::vector<RaftMessage> immediate_messages;
             std::vector<RaftMessage> persisted_messages;
+            // Proposal success is outside RaftCore: Runtime may report it only after commit and apply.
             ApplyRange committed_range;
             RaftRole role = RaftRole::FOLLOWER;
             common::Term term = common::kInitialTerm;
@@ -96,6 +121,7 @@ namespace cpr::raft
                                        PeerProgress *progress) const;
         common::Status GetApplyReadyRange(ApplyRange *range) const;
         common::Status GetOutput(RaftOutput *output) const;
+        common::Status ConfirmPersistence(const PersistenceConfirmation &confirmation);
         common::Status ConfirmPersistence(bool hard_state_persisted,
                                           common::LogIndex stable_index);
 

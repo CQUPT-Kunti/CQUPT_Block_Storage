@@ -24,6 +24,18 @@ namespace cpr::raft
         bool empty = true;
     };
 
+    struct RaftStorageOperationResult
+    {
+        common::Status status;
+        bool has_hard_state = false;
+        HardState hard_state;
+        common::LogIndex last_log_index = common::kInvalidLogIndex;
+        bool has_snapshot = false;
+        SnapshotMetadata snapshot;
+    };
+
+    // Each successful write returns Status today; Runtime can summarize it with
+    // RaftStorageOperationResult before confirming RaftCore persistence gates.
     class IRaftStorage
     {
     public:

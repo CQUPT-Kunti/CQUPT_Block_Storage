@@ -145,7 +145,7 @@
 
 **Goal**: Drive RaftCore through bounded queues and ordered worker threads for US1.
 
-- [ ] T021 [US1] P5-T01 Implement RaftRuntime event model and bounded queues in `cross-platform-raft/src/raft/raft_runtime.h` and `raft_runtime.cpp`
+- [X] T021 [US1] P5-T01 Implement RaftRuntime event model and bounded queues in `cross-platform-raft/src/raft/raft_runtime.h` and `raft_runtime.cpp`
   - Scope: Define Tick, network message, Proposal, membership change, persistence completion, apply completion, and shutdown events with bounded queue insertion results.
   - Dependencies: T019, T003.
   - Done: Full queues return BUSY, RESOURCE_EXHAUSTED, RETRY_LATER, or equivalent explicit statuses.

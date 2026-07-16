@@ -3,6 +3,7 @@ add_library(cpr_raft
     memory_raft_storage.cpp
     raft_core.cpp
     raft_log.cpp
+    raft_runtime.cpp
     raft_snapshot.cpp
 )
 

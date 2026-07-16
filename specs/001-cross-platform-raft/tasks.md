@@ -9,43 +9,43 @@
 
 **Goal**: Establish build, module layout, shared utilities, config, platform wrappers, logging, and lifecycle foundations.
 
-- [ ] T001 P1-T01 Create the C++17 project skeleton and module directories in `cross-platform-raft/`
+- [X] T001 P1-T01 Create the C++17 project skeleton and module directories in `cross-platform-raft/`
   - Scope: Create `cross-platform-raft/CMakeLists.txt`, `cmake/`, `config/`, `proto/`, `src/common/`, `src/platform/`, `src/config/`, `src/raft/`, `src/metadata/`, `src/store/`, `src/rpc/`, `src/server/`, `tests/`, and `tools/`.
   - Dependencies: None.
   - Done: Directory structure exists, manually maintained `.h`/`.cpp` pairs are planned in the same directories, and root CMake can include module subdirectories without adding feature code.
   - Parallel: No.
 
-- [ ] T002 P1-T02 Configure CMake dependencies and compiler/platform options in `cross-platform-raft/CMakeLists.txt` and `cross-platform-raft/cmake/`
+- [X] T002 P1-T02 Configure CMake dependencies and compiler/platform options in `cross-platform-raft/CMakeLists.txt` and `cross-platform-raft/cmake/`
   - Scope: Add C++17 standard, MSVC/GCC/Clang warnings, Visual Studio/Ninja/Unix Makefiles compatibility, gRPC, Protocol Buffers, GoogleTest, nlohmann/json, optional spdlog, and generated protobuf build integration.
   - Dependencies: T001.
   - Done: CMake configuration uses `CompilerOptions.cmake`, `Dependencies.cmake`, and `PlatformOptions.cmake`; no dependency version or compiler standard beyond the plan is introduced.
   - Parallel: No.
 
-- [ ] T003 [P] P1-T03 Implement common status, IDs, checksum, and bounded queue utilities in `cross-platform-raft/src/common/`
+- [X] T003 [P] P1-T03 Implement common status, IDs, checksum, and bounded queue utilities in `cross-platform-raft/src/common/`
   - Scope: Implement `types.h`, `status.h/.cpp`, `checksum.h/.cpp`, and `bounded_queue.h/.cpp` with explicit BUSY, RESOURCE_EXHAUSTED, and RETRY_LATER style statuses.
   - Dependencies: T001.
   - Done: Common utilities have no dependency on Raft, platform-specific APIs, metadata, store, RPC, or server modules.
   - Parallel: Yes, after T001; edits only `src/common/`.
 
-- [ ] T004 [P] P1-T04 Implement JSON configuration loading and validation in `cross-platform-raft/src/config/` and `cross-platform-raft/config/`
+- [X] T004 [P] P1-T04 Implement JSON configuration loading and validation in `cross-platform-raft/src/config/` and `cross-platform-raft/config/`
   - Scope: Implement `config.h/.cpp`, `config_loader.h/.cpp`, and `node-1.json` through `node-4.json` covering all manually configurable parameters from the spec.
   - Dependencies: T003.
   - Done: Config validates node ids, ports, paths, bootstrap membership, heartbeat/election timeout relationship, queue capacities, message-size limits, and keeps JSON parsing outside RaftCore.
   - Parallel: Yes, after T003; edits only config files.
 
-- [ ] T005 [P] P1-T05 Implement FileOps, ProcessOps, and TimeOps in `cross-platform-raft/src/platform/`
+- [X] T005 [P] P1-T05 Implement FileOps, ProcessOps, and TimeOps in `cross-platform-raft/src/platform/`
   - Scope: Implement `file_ops.h/.cpp`, `process_ops.h/.cpp`, and `time_ops.h/.cpp` for Windows/Linux file operations, graceful shutdown hooks, monotonic time, and test-time utilities.
   - Dependencies: T003.
   - Done: All direct platform APIs are isolated here; business and Raft modules use platform abstractions only.
   - Parallel: Yes, after T003; edits only `src/platform/`.
 
-- [ ] T006 [P] P1-T06 Add basic logging and server lifecycle scaffolding in `cross-platform-raft/src/server/`
+- [X] T006 [P] P1-T06 Add basic logging and server lifecycle scaffolding in `cross-platform-raft/src/server/`
   - Scope: Add minimal logging integration with optional spdlog fallback and lifecycle shell for startup/shutdown composition.
   - Dependencies: T002, T003, T004, T005.
   - Done: Server lifecycle does not contain Raft algorithms or business logic; logging remains optional.
   - Parallel: Yes, after dependencies; edits only server scaffolding.
 
-- [ ] T007 P1-T07 Run consolidated phase 1 verification for build, config, and platform basics using `cross-platform-raft/tests/`
+- [X] T007 P1-T07 Run consolidated phase 1 verification for build, config, and platform basics using `cross-platform-raft/tests/`
   - Scope: Add grouped GoogleTest coverage for status, checksum, bounded queue, config loading, and FileOps temporary directory/read/write/truncate/flush/rename/atomic replacement behavior.
   - Dependencies: T001-T006.
   - Done: Linux preset build and test commands are documented/run when available; Windows preset commands are documented; tests use `std::filesystem` temporary directories and avoid `/tmp`, Bash, fork, Linux-only signals, and fixed separators.
@@ -55,19 +55,19 @@
 
 **Goal**: Establish protocol data types and log invariants before protocol logic.
 
-- [ ] T008 P2-T01 Implement Raft base types and protocol data structures in `cross-platform-raft/src/raft/raft_types.h` and `cross-platform-raft/src/raft/raft_message.h`
+- [X] T008 P2-T01 Implement Raft base types and protocol data structures in `cross-platform-raft/src/raft/raft_types.h` and `cross-platform-raft/src/raft/raft_message.h`
   - Scope: Define RaftRole, NodeState, LogEntry, HardState, RaftMessage, RaftMember, PeerProgress, Snapshot metadata, membership data, and replacement-safe opaque payload fields.
   - Dependencies: T003.
   - Done: RaftRole contains only FOLLOWER, CANDIDATE, LEADER, LEARNER; NodeState contains only RUNNING, STOPPED, FAILED; no business types are introduced.
   - Parallel: No.
 
-- [ ] T009 P2-T02 Implement RaftLog append, lookup, conflict, and progress behavior in `cross-platform-raft/src/raft/raft_log.h` and `cross-platform-raft/src/raft/raft_log.cpp`
+- [X] T009 P2-T02 Implement RaftLog append, lookup, conflict, and progress behavior in `cross-platform-raft/src/raft/raft_log.h` and `cross-platform-raft/src/raft/raft_log.cpp`
   - Scope: Implement append, batch append, index lookup, term lookup, log matching, conflict detection, conflict truncation, range reads, stableIndex, commitIndex, appliedIndex, and snapshot boundary behavior.
   - Dependencies: T008.
   - Done: RaftLog distinguishes unpersisted, persisted, committed, and applied entries and enforces `appliedIndex <= commitIndex <= lastIndex`.
   - Parallel: No.
 
-- [ ] T010 P2-T03 Run consolidated RaftLog verification in `cross-platform-raft/tests/raft_log_test.cpp`
+- [X] T010 P2-T03 Run consolidated RaftLog verification in `cross-platform-raft/tests/raft_log_test.cpp`
   - Scope: Test log append, batch append, range query, term match, conflict truncation, marker advancement, snapshot boundary behavior, and invariant rejection paths.
   - Dependencies: T008, T009.
   - Done: Primary RaftLog behaviors and invariants pass as one grouped test target.
@@ -77,31 +77,31 @@
 
 **Goal**: Deliver deterministic in-memory Raft elections, replication, conflict catch-up, and learner restrictions for US1.
 
-- [ ] T011 [US1] P3-T01 Implement RaftCore state transitions and logical tick handling in `cross-platform-raft/src/raft/raft_core.h` and `cross-platform-raft/src/raft/raft_core.cpp`
+- [X] T011 [US1] P3-T01 Implement RaftCore state transitions and logical tick handling in `cross-platform-raft/src/raft/raft_core.h` and `cross-platform-raft/src/raft/raft_core.cpp`
   - Scope: Implement Follower, Candidate, Leader, Learner transitions; logical Tick handling; randomized election timeout input; election start; term/vote changes.
   - Dependencies: T009.
   - Done: RaftCore remains single-threaded and does not include gRPC, file, JSON, platform, thread, time, or business dependencies.
   - Parallel: No.
 
-- [ ] T012 [US1] P3-T02 Implement RequestVote, heartbeat, and AppendEntries handling in `cross-platform-raft/src/raft/raft_core.cpp`
+- [X] T012 [US1] P3-T02 Implement RequestVote, heartbeat, and AppendEntries handling in `cross-platform-raft/src/raft/raft_core.cpp`
   - Scope: Implement RequestVote request/response, leader heartbeat generation, AppendEntries request/response, stale-term handling, and log match checks.
   - Dependencies: T011.
   - Done: Vote and append behavior follows Raft log matching and term rules using RaftLog only.
   - Parallel: No.
 
-- [ ] T013 [US1] P3-T03 Implement leader replication progress and majority commit in `cross-platform-raft/src/raft/raft_core.cpp`
+- [X] T013 [US1] P3-T03 Implement leader replication progress and majority commit in `cross-platform-raft/src/raft/raft_core.cpp`
   - Scope: Implement nextIndex, matchIndex, follower catch-up, conflict backoff, majority commitIndex advancement, apply-ready output, and learner progress without quorum participation.
   - Dependencies: T012.
   - Done: Leader advances commitIndex only after majority replication and never counts learners in quorum.
   - Parallel: No.
 
-- [ ] T014 [US1] P3-T04 Implement RaftCore output batches for persistence, messages, and committed ranges in `cross-platform-raft/src/raft/raft_core.h` and `cross-platform-raft/src/raft/raft_core.cpp`
+- [X] T014 [US1] P3-T04 Implement RaftCore output batches for persistence, messages, and committed ranges in `cross-platform-raft/src/raft/raft_core.h` and `cross-platform-raft/src/raft/raft_core.cpp`
   - Scope: Expose stable outputs for HardState updates, log entries needing persistence, outbound messages gated by persistence, and committed ranges.
   - Dependencies: T013.
   - Done: RaftCore reports what must be persisted before dependent messages but does not perform storage or transport work itself.
   - Parallel: No.
 
-- [ ] T015 [US1] P3-T05 Run consolidated RaftCore simulation tests in `cross-platform-raft/tests/raft_core_test.cpp`
+- [X] T015 [US1] P3-T05 Run consolidated RaftCore simulation tests in `cross-platform-raft/tests/raft_core_test.cpp`
   - Scope: Use logical ticks and in-memory logs to test elections, split votes, leader failure, RequestVote, heartbeats, replication, conflict catch-up, majority commit, and learner restrictions.
   - Dependencies: T011-T014.
   - Done: Tests contain no real sleeps or wall-clock dependencies and verify deterministic protocol behavior.
@@ -111,19 +111,19 @@
 
 **Goal**: Provide durable storage and recovery while preserving platform isolation and persistence-before-message rules for US1.
 
-- [ ] T016 [US1] P4-T01 Define IRaftStorage and implement MemoryRaftStorage in `cross-platform-raft/src/raft/raft_storage.h`, `memory_raft_storage.h`, and `memory_raft_storage.cpp`
+- [X] T016 [US1] P4-T01 Define IRaftStorage and implement MemoryRaftStorage in `cross-platform-raft/src/raft/raft_storage.h`, `memory_raft_storage.h`, and `memory_raft_storage.cpp`
   - Scope: Define Open, Load, SaveHardState, AppendEntries, TruncateSuffix, SaveSnapshot, and in-memory behavior for tests.
   - Dependencies: T014.
   - Done: Storage interface is stable and replaceable without RaftCore changes.
   - Parallel: No.
 
-- [ ] T017 [US1] P4-T02 Implement FileRaftStorage record format and durable log operations in `cross-platform-raft/src/raft/raft_storage.cpp`, `file_raft_storage.h`, and `file_raft_storage.cpp`
+- [X] T017 [US1] P4-T02 Implement FileRaftStorage record format and durable log operations in `cross-platform-raft/src/raft/raft_storage.cpp`, `file_raft_storage.h`, and `file_raft_storage.cpp`
   - Scope: Implement format_version, record_type, index, term, payload_length, checksum, HardState save/load, log append/load, conflict truncation, and durable flush via FileOps.
   - Dependencies: T016, T005.
   - Done: FileRaftStorage does not call Windows/Linux APIs directly and never treats missing flush as successful durability.
   - Parallel: No.
 
-- [ ] T018 [US1] P4-T03 Implement Snapshot save, load, validation, compaction boundary, and startup recovery in `cross-platform-raft/src/raft/raft_snapshot.h`, `raft_snapshot.cpp`, and storage files
+- [X] T018 [US1] P4-T03 Implement Snapshot save, load, validation, compaction boundary, and startup recovery in `cross-platform-raft/src/raft/raft_snapshot.h`, `raft_snapshot.cpp`, and storage files
   - Scope: Save/load snapshots, validate checksums, preserve last included index/term and membership view, recover Snapshot plus HardState plus logs on startup.
   - Dependencies: T017.
   - Done: Incomplete tails are recovered safely, checksum errors are explicit corruption, and snapshot boundaries remain compatible with RaftLog.

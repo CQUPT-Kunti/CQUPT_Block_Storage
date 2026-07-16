@@ -3,11 +3,13 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 
 #include "common/checksum.h"
 #include "platform/file_ops.h"
+#include "raft/raft_snapshot.h"
 
 namespace cpr::raft
 {
@@ -23,6 +25,7 @@ namespace cpr::raft
         constexpr std::size_t kRecordHeaderSize = 40;
         constexpr const char *kHardStateFileName = "hard_state.bin";
         constexpr const char *kLogFileName = "log.bin";
+        constexpr const char *kSnapshotFileName = "snapshot.bin";
 
         common::Status Invalid(std::string message)
         {
@@ -216,18 +219,32 @@ namespace cpr::raft
         };
 
         common::Status DecodeRecords(const FileData &data,
-                                     std::vector<DecodedRecord> *records)
+                                     std::vector<DecodedRecord> *records,
+                                     bool allow_incomplete_tail = false,
+                                     bool *had_incomplete_tail = nullptr)
         {
             if (records == nullptr)
             {
                 return Invalid("record output pointer must not be null");
             }
             records->clear();
+            if (had_incomplete_tail != nullptr)
+            {
+                *had_incomplete_tail = false;
+            }
             std::size_t offset = 0;
             while (offset < data.size())
             {
                 if (data.size() - offset < kRecordHeaderSize)
                 {
+                    if (allow_incomplete_tail)
+                    {
+                        if (had_incomplete_tail != nullptr)
+                        {
+                            *had_incomplete_tail = true;
+                        }
+                        return common::Status::OK();
+                    }
                     return Corrupt("incomplete record tail");
                 }
 
@@ -280,6 +297,14 @@ namespace cpr::raft
                 }
                 if (payload_length > data.size() - offset)
                 {
+                    if (allow_incomplete_tail)
+                    {
+                        if (had_incomplete_tail != nullptr)
+                        {
+                            *had_incomplete_tail = true;
+                        }
+                        return common::Status::OK();
+                    }
                     return Corrupt("incomplete record payload");
                 }
 
@@ -301,13 +326,18 @@ namespace cpr::raft
         }
 
         common::Status ReadFileIfPresent(const std::filesystem::path &path,
-                                         FileData *data)
+                                         FileData *data,
+                                         bool *exists_out = nullptr)
         {
             bool exists = false;
             common::Status status = platform::Exists(path, &exists);
             if (!status.ok())
             {
                 return status;
+            }
+            if (exists_out != nullptr)
+            {
+                *exists_out = exists;
             }
             data->clear();
             if (!exists)
@@ -356,6 +386,17 @@ namespace cpr::raft
             return data;
         }
 
+        common::LogIndex LastIndex(const std::optional<SnapshotData> &snapshot,
+                                   const std::vector<LogEntry> &entries)
+        {
+            if (!entries.empty())
+            {
+                return entries.back().index;
+            }
+            return snapshot ? snapshot->metadata.last_included_index
+                            : common::kInvalidLogIndex;
+        }
+
     } // namespace
 
     common::Status FileRaftStorage::Open(const std::filesystem::path &storage_path)
@@ -372,6 +413,7 @@ namespace cpr::raft
 
         hard_state_path_ = storage_path / kHardStateFileName;
         log_path_ = storage_path / kLogFileName;
+        snapshot_path_ = storage_path / kSnapshotFileName;
 
         platform::FileHandle file;
         status = platform::FileHandle::OpenOrCreate(hard_state_path_, &file);
@@ -397,7 +439,8 @@ namespace cpr::raft
 
         HardState loaded_hard_state;
         std::vector<LogEntry> loaded_entries;
-        status = LoadFromDisk(&loaded_hard_state, &loaded_entries);
+        std::optional<SnapshotData> loaded_snapshot;
+        status = LoadFromDisk(&loaded_hard_state, &loaded_entries, &loaded_snapshot);
         if (!status.ok())
         {
             open_ = false;
@@ -406,6 +449,7 @@ namespace cpr::raft
 
         hard_state_ = loaded_hard_state;
         entries_ = std::move(loaded_entries);
+        snapshot_ = std::move(loaded_snapshot);
         open_ = true;
         return common::Status::OK();
     }
@@ -424,15 +468,17 @@ namespace cpr::raft
 
         HardState hard_state;
         std::vector<LogEntry> entries;
-        status = LoadFromDisk(&hard_state, &entries);
+        std::optional<SnapshotData> snapshot;
+        status = LoadFromDisk(&hard_state, &entries, &snapshot);
         if (!status.ok())
         {
             return status;
         }
         result->hard_state = hard_state;
         result->entries = std::move(entries);
-        result->snapshot.reset();
+        result->snapshot = std::move(snapshot);
         result->empty = result->entries.empty() &&
+                        !result->snapshot.has_value() &&
                         result->hard_state.current_term == common::kInitialTerm &&
                         result->hard_state.voted_for == common::kInvalidNodeId &&
                         result->hard_state.commit_index == common::kInvalidLogIndex &&
@@ -544,14 +590,50 @@ namespace cpr::raft
         return common::Status::OK();
     }
 
-    common::Status FileRaftStorage::SaveSnapshot(const SnapshotData &)
+    common::Status FileRaftStorage::SaveSnapshot(const SnapshotData &snapshot)
     {
         common::Status status = RequireOpen();
         if (!status.ok())
         {
             return status;
         }
-        return common::Status::RetryLater("snapshot persistence is not implemented in T017");
+        status = ValidateSnapshot(snapshot);
+        if (!status.ok())
+        {
+            return status;
+        }
+
+        SnapshotBytes snapshot_bytes;
+        status = EncodeSnapshotData(snapshot, &snapshot_bytes);
+        if (!status.ok())
+        {
+            return status;
+        }
+
+        std::vector<LogEntry> next_entries;
+        next_entries.reserve(entries_.size());
+        for (const LogEntry &entry : entries_)
+        {
+            if (entry.index > snapshot.metadata.last_included_index)
+            {
+                next_entries.push_back(entry);
+            }
+        }
+
+        status = platform::AtomicReplace(snapshot_path_, snapshot_bytes);
+        if (!status.ok())
+        {
+            return status;
+        }
+        status = platform::AtomicReplace(log_path_, EncodeLogFile(next_entries));
+        if (!status.ok())
+        {
+            return status;
+        }
+
+        snapshot_ = snapshot;
+        entries_ = std::move(next_entries);
+        return common::Status::OK();
     }
 
     common::Status FileRaftStorage::RequireOpen() const
@@ -565,14 +647,37 @@ namespace cpr::raft
 
     common::Status FileRaftStorage::LoadFromDisk(
         HardState *hard_state,
-        std::vector<LogEntry> *entries) const
+        std::vector<LogEntry> *entries,
+        std::optional<SnapshotData> *snapshot) const
     {
-        if (hard_state == nullptr || entries == nullptr)
+        if (hard_state == nullptr || entries == nullptr || snapshot == nullptr)
         {
             return Invalid("load output pointer must not be null");
         }
+        snapshot->reset();
+
+        FileData snapshot_data;
+        bool snapshot_exists = false;
+        common::Status status = ReadFileIfPresent(snapshot_path_,
+                                                  &snapshot_data,
+                                                  &snapshot_exists);
+        if (!status.ok())
+        {
+            return status;
+        }
+        if (snapshot_exists)
+        {
+            SnapshotData decoded_snapshot;
+            status = DecodeSnapshotData(snapshot_data, &decoded_snapshot);
+            if (!status.ok())
+            {
+                return status;
+            }
+            *snapshot = std::move(decoded_snapshot);
+        }
+
         FileData hard_state_data;
-        common::Status status = ReadFileIfPresent(hard_state_path_, &hard_state_data);
+        status = ReadFileIfPresent(hard_state_path_, &hard_state_data);
         if (!status.ok())
         {
             return status;
@@ -613,12 +718,16 @@ namespace cpr::raft
         if (!log_data.empty())
         {
             std::vector<DecodedRecord> records;
-            status = DecodeRecords(log_data, &records);
+            bool had_incomplete_tail = false;
+            status = DecodeRecords(log_data, &records, true, &had_incomplete_tail);
             if (!status.ok())
             {
                 return status;
             }
             entries->reserve(records.size());
+            const common::LogIndex snapshot_index =
+                *snapshot ? (*snapshot)->metadata.last_included_index
+                          : common::kInvalidLogIndex;
             for (const DecodedRecord &record : records)
             {
                 if (record.type != kLogEntryRecord)
@@ -639,17 +748,37 @@ namespace cpr::raft
                 {
                     return status;
                 }
+                if (entry.index <= snapshot_index)
+                {
+                    continue;
+                }
                 if (!entries->empty() && entry.index != entries->back().index + 1)
                 {
                     return Corrupt("log records are not contiguous");
                 }
+                if (entries->empty() && entry.index != snapshot_index + 1)
+                {
+                    return Corrupt("log records do not start after snapshot boundary");
+                }
                 entries->push_back(std::move(entry));
             }
+            if (had_incomplete_tail)
+            {
+                status = platform::AtomicReplace(log_path_, EncodeLogFile(*entries));
+                if (!status.ok())
+                {
+                    return status;
+                }
+            }
         }
-        if (hard_state->commit_index > (entries->empty() ? common::kInvalidLogIndex
-                                                         : entries->back().index))
+        const common::LogIndex last_index = LastIndex(*snapshot, *entries);
+        if (hard_state->commit_index > last_index)
         {
             return Corrupt("hard state commit index exceeds loaded log");
+        }
+        if (*snapshot && hard_state->commit_index < (*snapshot)->metadata.last_included_index)
+        {
+            return Corrupt("hard state commit index is behind snapshot boundary");
         }
         return common::Status::OK();
     }
@@ -678,12 +807,13 @@ namespace cpr::raft
         {
             return common::Status::OK();
         }
+        const common::LogIndex snapshot_index = SnapshotIndex();
         for (std::size_t i = 0; i < entries.size(); ++i)
         {
             const LogEntry &entry = entries[i];
-            if (entry.index == common::kInvalidLogIndex)
+            if (entry.index <= snapshot_index)
             {
-                return Invalid("entry index must be positive");
+                return Invalid("entry index must be after snapshot boundary");
             }
             if (entry.term == common::kInitialTerm)
             {
@@ -705,21 +835,98 @@ namespace cpr::raft
         return common::Status::OK();
     }
 
+    common::Status FileRaftStorage::ValidateSnapshot(
+        const SnapshotData &snapshot) const
+    {
+        const common::LogIndex index = snapshot.metadata.last_included_index;
+        const common::Term term = snapshot.metadata.last_included_term;
+        if (index == common::kInvalidLogIndex)
+        {
+            return Invalid("snapshot index must be positive");
+        }
+        if (term == common::kInitialTerm)
+        {
+            return Invalid("snapshot term must be positive");
+        }
+        if (index < SnapshotIndex())
+        {
+            return Invalid("snapshot boundary cannot move backward");
+        }
+        if (index > hard_state_.commit_index)
+        {
+            return Invalid("snapshot index cannot exceed committed index");
+        }
+
+        common::Term stored_term = common::kInitialTerm;
+        common::Status status = GetTerm(index, &stored_term);
+        if (!status.ok())
+        {
+            return status;
+        }
+        if (stored_term != term)
+        {
+            return Invalid("snapshot term does not match stored log term");
+        }
+        return common::Status::OK();
+    }
+
+    common::Status FileRaftStorage::GetTerm(common::LogIndex index,
+                                            common::Term *term) const
+    {
+        if (term == nullptr)
+        {
+            return Invalid("term output pointer must not be null");
+        }
+        if (index == common::kInvalidLogIndex)
+        {
+            *term = common::kInitialTerm;
+            return common::Status::OK();
+        }
+        if (snapshot_ && index == SnapshotIndex())
+        {
+            *term = SnapshotTerm();
+            return common::Status::OK();
+        }
+        if (!HasEntry(index))
+        {
+            return common::Status::NotFound("log term not found");
+        }
+        *term = entries_[Offset(index)].term;
+        return common::Status::OK();
+    }
+
+    common::LogIndex FileRaftStorage::SnapshotIndex() const noexcept
+    {
+        return snapshot_ ? snapshot_->metadata.last_included_index
+                         : common::kInvalidLogIndex;
+    }
+
+    common::Term FileRaftStorage::SnapshotTerm() const noexcept
+    {
+        return snapshot_ ? snapshot_->metadata.last_included_term
+                         : common::kInitialTerm;
+    }
+
+    common::LogIndex FileRaftStorage::FirstLogIndex() const noexcept
+    {
+        return SnapshotIndex() + 1;
+    }
+
     common::LogIndex FileRaftStorage::LastLogIndex() const noexcept
     {
-        return entries_.empty() ? common::kInvalidLogIndex : entries_.back().index;
+        return entries_.empty() ? SnapshotIndex() : entries_.back().index;
     }
 
     bool FileRaftStorage::HasEntry(common::LogIndex index) const noexcept
     {
         return !entries_.empty() &&
-               index >= entries_.front().index &&
+               index >= FirstLogIndex() &&
                index <= entries_.back().index;
     }
 
     std::size_t FileRaftStorage::Offset(common::LogIndex index) const noexcept
     {
-        return static_cast<std::size_t>(index - entries_.front().index);
+        return static_cast<std::size_t>(index - FirstLogIndex());
     }
 
 } // namespace cpr::raft

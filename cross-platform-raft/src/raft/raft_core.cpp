@@ -811,6 +811,16 @@ namespace cpr::raft
         return node_id_;
     }
 
+    const std::vector<common::NodeId> &RaftCore::voter_ids() const noexcept
+    {
+        return voter_ids_;
+    }
+
+    const std::vector<common::NodeId> &RaftCore::learner_ids() const noexcept
+    {
+        return learner_ids_;
+    }
+
     RaftRole RaftCore::role() const noexcept
     {
         return role_;

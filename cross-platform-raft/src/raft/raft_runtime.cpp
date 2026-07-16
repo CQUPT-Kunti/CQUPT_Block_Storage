@@ -1,6 +1,7 @@
 #include "raft/raft_runtime.h"
 
 #include <algorithm>
+#include <deque>
 #include <string>
 #include <utility>
 
@@ -19,9 +20,19 @@ namespace cpr::raft
             return common::Status::Busy(std::move(message));
         }
 
+        common::Status NotFound(std::string message)
+        {
+            return common::Status::NotFound(std::move(message));
+        }
+
         common::Status NotSupported(std::string message)
         {
             return common::Status::RetryLater(std::move(message));
+        }
+
+        common::Status ResourceExhausted(std::string message)
+        {
+            return common::Status::ResourceExhausted(std::move(message));
         }
 
     } // namespace
@@ -33,13 +44,16 @@ namespace cpr::raft
     RaftRuntime::RaftRuntime(const Options &options)
         : event_queue_(options.event_queue_capacity),
           persistence_queue_(options.persistence_queue_capacity),
-          apply_queue_(options.apply_queue_capacity)
+          apply_queue_(options.apply_queue_capacity),
+          peer_queue_capacity_(options.peer_queue_capacity),
+          proposal_results_{.max_capacity = options.proposal_result_queue_capacity}
     {
     }
 
     RaftRuntime::~RaftRuntime()
     {
-        if (threads_running_)
+        if (state_ == RuntimeState::RUNNING ||
+            state_ == RuntimeState::STOPPING)
         {
             RequestShutdown();
             WaitForShutdown();
@@ -53,28 +67,65 @@ namespace cpr::raft
     common::Status RaftRuntime::Initialize(RaftCore *core, IRaftStorage *storage,
                                            ApplyFn apply_fn)
     {
+        if (state_ != RuntimeState::CREATED)
+        {
+            return Busy("runtime is already initialized");
+        }
         if (core == nullptr || storage == nullptr)
         {
             return InvalidArgument("core and storage must not be null");
         }
+
+        if (peer_queue_capacity_ == 0)
+        {
+            return InvalidArgument(
+                "peer queue capacity must be greater than zero");
+        }
+
         core_ = core;
         storage_ = storage;
         apply_fn_ = std::move(apply_fn);
-        initialized_ = true;
+
+        // Build peer queues from RaftCore's voter/learner lists.
+        const auto &voters = core_->voter_ids();
+        const auto &learners = core_->learner_ids();
+        const common::NodeId local_id = core_->node_id();
+
+        std::vector<common::NodeId> all_peers;
+        all_peers.reserve(voters.size() + learners.size());
+        for (auto id : voters)
+            if (id != local_id)
+                all_peers.push_back(id);
+        for (auto id : learners)
+            if (id != local_id)
+                all_peers.push_back(id);
+
+        std::sort(all_peers.begin(), all_peers.end());
+        all_peers.erase(std::unique(all_peers.begin(), all_peers.end()),
+                        all_peers.end());
+
+        {
+            std::lock_guard<std::mutex> lock(peer_queues_mutex_);
+            for (auto peer_id : all_peers)
+            {
+                peer_queues_.emplace(
+                    std::piecewise_construct,
+                    std::forward_as_tuple(peer_id),
+                    std::forward_as_tuple(peer_queue_capacity_));
+            }
+        }
+
+        state_ = RuntimeState::INITIALIZED;
         return common::Status::OK();
     }
 
     common::Status RaftRuntime::Start()
     {
-        if (!initialized_)
+        if (state_ != RuntimeState::INITIALIZED)
         {
-            return InvalidArgument("runtime is not initialized");
+            return Busy("runtime is not in initialized state");
         }
-        if (threads_running_)
-        {
-            return Busy("threads are already running");
-        }
-        threads_running_ = true;
+        state_ = RuntimeState::RUNNING;
         protocol_thread_ = std::thread(&RaftRuntime::ProtocolLoop, this);
         persistence_thread_ = std::thread(&RaftRuntime::PersistenceLoop, this);
         apply_thread_ = std::thread(&RaftRuntime::ApplyLoop, this);
@@ -83,33 +134,38 @@ namespace cpr::raft
 
     common::Status RaftRuntime::RequestShutdown()
     {
-        if (shutdown_requested_)
+        if (state_ == RuntimeState::STOPPED ||
+            state_ == RuntimeState::STOPPING)
         {
-            return Busy("shutdown already requested");
+            return Busy("runtime is already stopping or stopped");
         }
-        shutdown_requested_ = true;
+        if (state_ != RuntimeState::RUNNING)
+        {
+            return Busy("runtime is not running");
+        }
 
+        state_ = RuntimeState::STOPPING;
         event_queue_.Close();
         persistence_queue_.Close();
         apply_queue_.Close();
+        CloseAllPeerQueues();
         return common::Status::OK();
     }
 
     void RaftRuntime::WaitForShutdown()
     {
         if (protocol_thread_.joinable())
-        {
             protocol_thread_.join();
-        }
         if (persistence_thread_.joinable())
-        {
             persistence_thread_.join();
-        }
         if (apply_thread_.joinable())
-        {
             apply_thread_.join();
-        }
-        threads_running_ = false;
+        state_ = RuntimeState::STOPPED;
+    }
+
+    RuntimeState RaftRuntime::state() const noexcept
+    {
+        return state_;
     }
 
     // ===================================================================
@@ -118,9 +174,9 @@ namespace cpr::raft
 
     common::Status RaftRuntime::Enqueue(RuntimeEvent &&event)
     {
-        if (shutdown_requested_)
+        if (state_ != RuntimeState::RUNNING)
         {
-            return Busy("runtime is shutting down");
+            return Busy("runtime is not running");
         }
         return event_queue_.Push(std::move(event));
     }
@@ -163,13 +219,13 @@ namespace cpr::raft
     }
 
     common::Status RaftRuntime::EnqueueMembershipChange(
-        const MembershipChangeEvent &event)
+        const MembershipChangeEvent &)
     {
         return NotSupported("membership change is not implemented");
     }
 
     common::Status RaftRuntime::EnqueueMembershipChange(
-        MembershipChangeEvent &&event)
+        MembershipChangeEvent &&)
     {
         return NotSupported("membership change is not implemented");
     }
@@ -199,23 +255,103 @@ namespace cpr::raft
     }
 
     // ===================================================================
-    //  Output
+    //  Peer output
     // ===================================================================
 
-    std::vector<RaftMessage> RaftRuntime::CollectOutputMessages()
+    common::Status RaftRuntime::TryDequeuePeerMessage(
+        common::NodeId peer_id, RaftMessage *message)
     {
-        std::lock_guard<std::mutex> lock(output_mutex_);
-        std::vector<RaftMessage> result;
-        result.swap(released_messages_);
-        return result;
+        if (message == nullptr)
+        {
+            return InvalidArgument("message output must not be null");
+        }
+        std::lock_guard<std::mutex> lock(peer_queues_mutex_);
+        auto it = peer_queues_.find(peer_id);
+        if (it == peer_queues_.end())
+        {
+            return NotFound("unknown peer");
+        }
+        PeerMessageQueue &q = it->second;
+        if (q.messages.empty())
+        {
+            return NotFound("peer queue is empty");
+        }
+        *message = std::move(q.messages.front());
+        q.messages.pop_front();
+        return common::Status::OK();
     }
 
-    std::vector<ProposalResult> RaftRuntime::CollectProposalResults()
+    bool RaftRuntime::IsPeerRegistered(common::NodeId peer_id) const noexcept
     {
-        std::lock_guard<std::mutex> lock(result_mutex_);
-        std::vector<ProposalResult> result;
-        result.swap(proposal_results_);
-        return result;
+        std::lock_guard<std::mutex> lock(peer_queues_mutex_);
+        return peer_queues_.find(peer_id) != peer_queues_.end();
+    }
+
+    std::size_t RaftRuntime::PeerQueueSize(common::NodeId peer_id) const
+    {
+        std::lock_guard<std::mutex> lock(peer_queues_mutex_);
+        auto it = peer_queues_.find(peer_id);
+        if (it == peer_queues_.end())
+            return 0;
+        return it->second.messages.size();
+    }
+
+    std::vector<ProposalResult> RaftRuntime::CollectProposalResults(
+        std::size_t max_count)
+    {
+        std::vector<ProposalResult> results;
+        results.reserve(max_count);
+        std::lock_guard<std::mutex> lock(results_mutex_);
+        for (std::size_t i = 0; i < max_count && !proposal_results_.items.empty(); ++i)
+        {
+            results.push_back(std::move(proposal_results_.items.front()));
+            proposal_results_.items.pop_front();
+        }
+        return results;
+    }
+
+    // ===================================================================
+    //  DistributeOutputMessages
+    // ===================================================================
+
+    common::Status RaftRuntime::DistributeOutputMessages(
+        std::vector<RaftMessage> &&messages)
+    {
+        for (auto &msg : messages)
+        {
+            const common::NodeId target = msg.target_node_id;
+            if (target == core_->node_id())
+                continue;
+
+            std::lock_guard<std::mutex> lock(peer_queues_mutex_);
+            auto it = peer_queues_.find(target);
+            if (it == peer_queues_.end())
+            {
+                return NotFound("output message targets unknown peer " +
+                                std::to_string(target));
+            }
+            PeerMessageQueue &q = it->second;
+            if (q.closed)
+            {
+                return Busy("peer queue is closed");
+            }
+            if (q.messages.size() >= q.max_capacity)
+            {
+                return ResourceExhausted("peer queue is full");
+            }
+            q.messages.push_back(std::move(msg));
+        }
+        return common::Status::OK();
+    }
+
+    void RaftRuntime::CloseAllPeerQueues()
+    {
+        std::lock_guard<std::mutex> lock(peer_queues_mutex_);
+        for (auto &[id, q] : peer_queues_)
+        {
+            (void)id;
+            q.closed = true;
+        }
     }
 
     // ===================================================================
@@ -224,12 +360,13 @@ namespace cpr::raft
 
     bool RaftRuntime::shutdown_requested() const noexcept
     {
-        return shutdown_requested_;
+        return state_ == RuntimeState::STOPPING ||
+               state_ == RuntimeState::STOPPED;
     }
 
     bool RaftRuntime::accepting_events() const noexcept
     {
-        return !shutdown_requested_;
+        return state_ == RuntimeState::RUNNING;
     }
 
     std::size_t RaftRuntime::event_queue_size() const
@@ -252,6 +389,12 @@ namespace cpr::raft
         return apply_queue_.size();
     }
 
+    std::size_t RaftRuntime::peer_count() const noexcept
+    {
+        std::lock_guard<std::mutex> lock(peer_queues_mutex_);
+        return peer_queues_.size();
+    }
+
     // ===================================================================
     //  Protocol loop
     // ===================================================================
@@ -264,44 +407,26 @@ namespace cpr::raft
             const common::Status pop_status = event_queue_.Pop(&event);
 
             if (pop_status.code() == common::StatusCode::kRetryLater)
-            {
                 break;
-            }
             if (!pop_status.ok())
-            {
                 continue;
-            }
 
             if (std::holds_alternative<TickEvent>(event))
-            {
                 ProcessTick();
-            }
             else if (std::holds_alternative<MessageEvent>(event))
-            {
                 ProcessMessage(std::get<MessageEvent>(event));
-            }
             else if (std::holds_alternative<ProposalEvent>(event))
-            {
                 ProcessProposal(std::get<ProposalEvent>(event));
-            }
             else if (std::holds_alternative<PersistenceCompletionEvent>(event))
-            {
                 ProcessPersistenceCompletion(
                     std::get<PersistenceCompletionEvent>(event));
-            }
             else if (std::holds_alternative<ApplyCompletionEvent>(event))
-            {
                 ProcessApplyCompletion(
                     std::get<ApplyCompletionEvent>(event));
-            }
             else if (std::holds_alternative<MembershipChangeEvent>(event))
-            {
                 ProcessMembershipChange();
-            }
             else if (std::holds_alternative<ShutdownEvent>(event))
-            {
                 break;
-            }
         }
         protocol_stopped_ = true;
     }
@@ -382,10 +507,7 @@ namespace cpr::raft
                                common::kInvalidLogIndex, status, true);
             return;
         }
-
-        const common::LogIndex assigned_index = core_->log().last_index();
-        pending_proposals_[event.proposal_id] = assigned_index;
-
+        pending_proposals_[event.proposal_id] = core_->log().last_index();
         DrainCoreOutput();
     }
 
@@ -408,7 +530,7 @@ namespace cpr::raft
 
     void RaftRuntime::ProcessMembershipChange()
     {
-        // Membership change not implemented. Silently dropped.
+        // Not implemented.
     }
 
     void RaftRuntime::ProcessApplyCompletion(
@@ -416,32 +538,24 @@ namespace cpr::raft
     {
         if (!event.status.ok())
         {
-            // Apply failed — produce failure result, do not advance.
             if (event.proposal_id != 0)
             {
                 EmitProposalResult(event.proposal_id,
-                                   event.applied_index,
-                                   event.status, true);
+                                   event.applied_index, event.status, true);
                 pending_proposals_.erase(event.proposal_id);
             }
             return;
         }
 
-        // Validate sequential order.
         const common::LogIndex expected = core_->log().applied_index() + 1;
         if (event.applied_index != expected)
-        {
             return;
-        }
 
         const common::Status confirm_status =
             core_->ConfirmApplied(event.applied_index);
         if (!confirm_status.ok())
-        {
             return;
-        }
 
-        // Produce success result if associated with a proposal.
         if (event.proposal_id != 0)
         {
             EmitProposalResult(event.proposal_id,
@@ -462,7 +576,7 @@ namespace cpr::raft
         if (!status.ok())
             return status;
 
-        // --- Persistence work ---
+        // Persistence work
         if (output.persistence.has_hard_state ||
             output.persistence.has_log_entries())
         {
@@ -470,31 +584,32 @@ namespace cpr::raft
             work.has_hard_state = output.persistence.has_hard_state;
             work.hard_state = output.persistence.hard_state;
             work.max_stable_index = output.persistence.last_log_index;
-
             if (!output.unstable_entries.empty())
-            {
                 work.entries = output.unstable_entries;
-            }
-
             status = persistence_queue_.Push(std::move(work));
             if (!status.ok())
                 return status;
         }
 
-        // --- Output messages ---
+        // Distribute immediate messages
+        if (!output.immediate_messages.empty())
         {
-            std::lock_guard<std::mutex> lock(output_mutex_);
-            for (auto &msg : output.immediate_messages)
-            {
-                released_messages_.push_back(std::move(msg));
-            }
-            for (auto &msg : output.persisted_messages)
-            {
-                released_messages_.push_back(std::move(msg));
-            }
+            status = DistributeOutputMessages(
+                std::move(output.immediate_messages));
+            if (!status.ok())
+                return status;
         }
 
-        // --- Schedule apply work ---
+        // Distribute persisted messages
+        if (!output.persisted_messages.empty())
+        {
+            status = DistributeOutputMessages(
+                std::move(output.persisted_messages));
+            if (!status.ok())
+                return status;
+        }
+
+        // Schedule apply work
         status = ScheduleApplyWork();
         if (!status.ok())
             return status;
@@ -518,13 +633,9 @@ namespace cpr::raft
         common::LogIndex schedule_start = range.begin;
         if (next_apply_schedule_ != common::kInvalidLogIndex &&
             next_apply_schedule_ >= schedule_start)
-        {
             schedule_start = next_apply_schedule_ + 1;
-        }
         if (schedule_start > range.end)
-        {
             return common::Status::OK();
-        }
 
         for (common::LogIndex idx = schedule_start; idx <= range.end; ++idx)
         {
@@ -539,22 +650,18 @@ namespace cpr::raft
             work.type = entry.type;
             work.payload = entry.payload;
 
-            // Find associated proposal ID
             for (const auto &[pid, log_idx] : pending_proposals_)
-            {
                 if (log_idx == idx)
                 {
                     work.proposal_id = pid;
                     break;
                 }
-            }
 
             status = apply_queue_.Push(std::move(work));
             if (!status.ok())
                 return status;
             next_apply_schedule_ = idx;
         }
-
         return common::Status::OK();
     }
 
@@ -581,11 +688,13 @@ namespace cpr::raft
         ProposalResult result;
         result.proposal_id = proposal_id;
         result.log_index = log_index;
-        result.status = status;
+        result.status = std::move(status);
         result.final_result = final_result;
-
-        std::lock_guard<std::mutex> lock(result_mutex_);
-        proposal_results_.push_back(std::move(result));
+        std::lock_guard<std::mutex> lock(results_mutex_);
+        if (proposal_results_.items.size() < proposal_results_.max_capacity)
+        {
+            proposal_results_.items.push_back(std::move(result));
+        }
     }
 
     // ===================================================================
@@ -598,7 +707,6 @@ namespace cpr::raft
         {
             PersistenceWork work;
             const common::Status pop_status = persistence_queue_.Pop(&work);
-
             if (pop_status.code() == common::StatusCode::kRetryLater)
                 break;
             if (!pop_status.ok())
@@ -609,7 +717,6 @@ namespace cpr::raft
             completion.has_hard_state = false;
             completion.has_snapshot = false;
             completion.status = common::Status::OK();
-
             bool failed = false;
 
             if (work.has_hard_state)
@@ -628,7 +735,6 @@ namespace cpr::raft
                     completion.hard_state = work.hard_state;
                 }
             }
-
             if (!failed && !work.entries.empty())
             {
                 common::Status s = storage_->AppendEntries(work.entries);
@@ -655,7 +761,6 @@ namespace cpr::raft
         {
             ApplyWork work;
             const common::Status pop_status = apply_queue_.Pop(&work);
-
             if (pop_status.code() == common::StatusCode::kRetryLater)
                 break;
             if (!pop_status.ok())

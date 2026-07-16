@@ -2,10 +2,12 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
 #include <mutex>
 #include <thread>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -19,6 +21,19 @@
 
 namespace cpr::raft
 {
+
+    // ===================================================================
+    //  Runtime lifecycle state
+    // ===================================================================
+
+    enum class RuntimeState : std::uint8_t
+    {
+        CREATED,
+        INITIALIZED,
+        RUNNING,
+        STOPPING,
+        STOPPED,
+    };
 
     // ===================================================================
     //  Runtime event types
@@ -115,9 +130,6 @@ namespace cpr::raft
     class RaftRuntime
     {
     public:
-        // Apply callback: called by the apply worker thread for each
-        // committed entry. Must be safe to call from a dedicated thread.
-        // Returns OK on success, or an error status.
         using ApplyFn = std::function<common::Status(const LogEntry &entry)>;
 
         struct Options
@@ -126,6 +138,7 @@ namespace cpr::raft
             std::size_t persistence_queue_capacity = 0;
             std::size_t apply_queue_capacity = 0;
             std::size_t proposal_result_queue_capacity = 0;
+            std::size_t peer_queue_capacity = 0;
         };
 
         explicit RaftRuntime(const Options &options);
@@ -141,6 +154,8 @@ namespace cpr::raft
         common::Status Start();
         common::Status RequestShutdown();
         void WaitForShutdown();
+
+        RuntimeState state() const noexcept;
 
         // --- Enqueue (thread-safe) ---
 
@@ -160,12 +175,15 @@ namespace cpr::raft
         common::Status EnqueueApplyCompletion(const ApplyCompletionEvent &event);
         common::Status EnqueueApplyCompletion(ApplyCompletionEvent &&event);
 
-        // --- Output ---
+        // --- Peer output ---
 
-        std::vector<RaftMessage> CollectOutputMessages();
+        common::Status TryDequeuePeerMessage(common::NodeId peer_id,
+                                             RaftMessage *message);
+        bool IsPeerRegistered(common::NodeId peer_id) const noexcept;
+        std::size_t PeerQueueSize(common::NodeId peer_id) const;
 
-        // Collect finished proposal results. Thread-safe. Clears buffer.
-        std::vector<ProposalResult> CollectProposalResults();
+        std::vector<ProposalResult> CollectProposalResults(
+            std::size_t max_count = 64);
 
         // --- Query ---
 
@@ -175,15 +193,19 @@ namespace cpr::raft
         std::size_t event_queue_capacity() const noexcept;
         std::size_t persistence_queue_size() const;
         std::size_t apply_queue_size() const;
+        std::size_t peer_count() const noexcept;
 
     private:
         common::Status Enqueue(RuntimeEvent &&event);
+        common::Status DistributeOutputMessages(
+            std::vector<RaftMessage> &&messages);
         common::Status ScheduleApplyWork();
         void EmitProposalResult(std::uint64_t proposal_id,
                                 common::LogIndex log_index,
                                 common::Status status, bool final_result);
         bool EmitPersistenceCompletion(PersistenceCompletionEvent &&event);
         bool EmitApplyCompletion(ApplyCompletionEvent &&event);
+        void CloseAllPeerQueues();
 
         void ProtocolLoop();
         void PersistenceLoop();
@@ -202,33 +224,42 @@ namespace cpr::raft
         IRaftStorage *storage_ = nullptr;
         ApplyFn apply_fn_;
 
-        bool initialized_ = false;
-        bool threads_running_ = false;
+        RuntimeState state_ = RuntimeState::CREATED;
 
         common::BoundedQueue<RuntimeEvent> event_queue_;
         common::BoundedQueue<PersistenceWork> persistence_queue_;
         common::BoundedQueue<ApplyWork> apply_queue_;
 
+        struct PeerMessageQueue
+        {
+            explicit PeerMessageQueue(std::size_t capacity)
+                : max_capacity(capacity) {}
+            std::deque<RaftMessage> messages;
+            std::size_t max_capacity = 0;
+            bool closed = false;
+        };
+
+        std::unordered_map<common::NodeId, PeerMessageQueue> peer_queues_;
+        mutable std::mutex peer_queues_mutex_;
+        std::size_t peer_queue_capacity_ = 0;
+
+        struct ResultQueue
+        {
+            std::deque<ProposalResult> items;
+            std::size_t max_capacity = 0;
+        };
+        ResultQueue proposal_results_;
+        mutable std::mutex results_mutex_;
+
         std::thread protocol_thread_;
         std::thread persistence_thread_;
         std::thread apply_thread_;
-        bool shutdown_requested_ = false;
+
         bool protocol_stopped_ = false;
         bool persistence_stopped_ = false;
         bool apply_stopped_ = false;
 
-        // Output message buffer
-        std::mutex output_mutex_;
-        std::vector<RaftMessage> released_messages_;
-
-        // Proposal result buffer
-        std::mutex result_mutex_;
-        std::vector<ProposalResult> proposal_results_;
-
-        // Proposal ID -> log index tracking (protocol thread only)
         std::map<std::uint64_t, common::LogIndex> pending_proposals_;
-
-        // Next apply index to schedule (protocol thread only)
         common::LogIndex next_apply_schedule_ = common::kInvalidLogIndex;
     };
 

@@ -128,6 +128,8 @@ namespace cpr::raft
                                           common::LogIndex stable_index);
 
         common::NodeId node_id() const noexcept;
+        const std::vector<common::NodeId> &voter_ids() const noexcept;
+        const std::vector<common::NodeId> &learner_ids() const noexcept;
         RaftRole role() const noexcept;
         common::Term current_term() const noexcept;
         common::NodeId voted_for() const noexcept;

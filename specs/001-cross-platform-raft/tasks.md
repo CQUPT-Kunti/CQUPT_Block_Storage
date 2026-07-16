@@ -163,7 +163,7 @@
   - Done: Runtime never returns proposal success for entries that are only in memory or only on local leader disk.
   - Parallel: No.
 
-- [ ] T024 [US1] P5-T04 Implement peer outbound queues, startup, shutdown, and graceful thread lifecycle in `cross-platform-raft/src/raft/raft_runtime.cpp`
+- [X] T024 [US1] P5-T04 Implement peer outbound queues, startup, shutdown, and graceful thread lifecycle in `cross-platform-raft/src/raft/raft_runtime.cpp`
   - Scope: Add one bounded outbound queue per peer, lifecycle start/stop, queue draining/rejection rules, and thread joins.
   - Dependencies: T023.
   - Done: Shutdown is deterministic and does not leave required runtime threads running.

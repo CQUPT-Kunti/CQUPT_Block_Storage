@@ -310,6 +310,18 @@ namespace cpr::raft
         return results;
     }
 
+    bool RaftRuntime::HasProposalResultOverflow() const
+    {
+        std::lock_guard<std::mutex> lock(results_mutex_);
+        return proposal_results_.overflow;
+    }
+
+    void RaftRuntime::ClearProposalResultOverflow()
+    {
+        std::lock_guard<std::mutex> lock(results_mutex_);
+        proposal_results_.overflow = false;
+    }
+
     // ===================================================================
     //  DistributeOutputMessages
     // ===================================================================
@@ -694,6 +706,10 @@ namespace cpr::raft
         if (proposal_results_.items.size() < proposal_results_.max_capacity)
         {
             proposal_results_.items.push_back(std::move(result));
+        }
+        else
+        {
+            proposal_results_.overflow = true;
         }
     }
 

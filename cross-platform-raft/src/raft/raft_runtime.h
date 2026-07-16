@@ -185,6 +185,11 @@ namespace cpr::raft
         std::vector<ProposalResult> CollectProposalResults(
             std::size_t max_count = 64);
 
+        // Returns true if proposal results were dropped due to full buffer
+        // since the last call to ClearProposalResultOverflow().
+        bool HasProposalResultOverflow() const;
+        void ClearProposalResultOverflow();
+
         // --- Query ---
 
         bool shutdown_requested() const noexcept;
@@ -247,6 +252,7 @@ namespace cpr::raft
         {
             std::deque<ProposalResult> items;
             std::size_t max_capacity = 0;
+            bool overflow = false;
         };
         ResultQueue proposal_results_;
         mutable std::mutex results_mutex_;

@@ -169,7 +169,7 @@
   - Done: Shutdown is deterministic and does not leave required runtime threads running.
   - Parallel: No.
 
-- [ ] T025 [US1] P5-T05 Run consolidated runtime concurrency tests in `cross-platform-raft/tests/raft_runtime_test.cpp`
+- [X] T025 [US1] P5-T05 Run consolidated runtime concurrency tests in `cross-platform-raft/tests/raft_runtime_test.cpp`
   - Scope: Verify concurrent Proposals, queue throttling, persistence completion gating, ordered apply, duplicate apply protection, per-peer backpressure, and thread shutdown.
   - Dependencies: T021-T024.
   - Done: Tests use bounded waits only and do not rely on long fixed sleeps.

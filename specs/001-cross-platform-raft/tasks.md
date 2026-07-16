@@ -135,7 +135,7 @@
   - Done: Interfaces expose enough result metadata for Runtime to gate messages and client success without returning success for memory-only or leader-local-disk-only entries.
   - Parallel: No.
 
-- [ ] T020 [US1] P4-T05 Run consolidated persistence and recovery tests in `cross-platform-raft/tests/raft_storage_test.cpp`
+- [X] T020 [US1] P4-T05 Run consolidated persistence and recovery tests in `cross-platform-raft/tests/raft_storage_test.cpp`
   - Scope: Verify clean restart, incomplete tails, checksum failures, conflict truncation, flush failure handling, snapshot save/load, and snapshot recovery with temporary directories.
   - Dependencies: T016-T019.
   - Done: Memory and file storage contract behavior is covered without direct platform API use outside FileOps.

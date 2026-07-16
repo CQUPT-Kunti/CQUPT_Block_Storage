@@ -101,3 +101,26 @@ target_include_directories(cpr_raft_core_tests
 gtest_discover_tests(cpr_raft_core_tests
     TEST_PREFIX raft_core.
 )
+
+add_executable(cpr_raft_storage_tests
+    raft_storage_test.cpp
+)
+
+target_link_libraries(cpr_raft_storage_tests
+    PRIVATE
+        ${CPR_GTEST_LINK_TARGET}
+        cpr_raft
+        cpr_platform
+        cpr_project_options
+        cpr_project_warnings
+        cpr_platform_options
+)
+
+target_include_directories(cpr_raft_storage_tests
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/src
+)
+
+gtest_discover_tests(cpr_raft_storage_tests
+    TEST_PREFIX raft_storage.
+)

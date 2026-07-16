@@ -182,6 +182,42 @@ namespace cpr::raft
         return ResetPeerProgress();
     }
 
+    common::Status RaftCore::Propose(const OpaquePayload &payload)
+    {
+        if (!initialized_)
+        {
+            return MakeInvalid("raft core is not initialized");
+        }
+        if (role_ != RaftRole::LEADER)
+        {
+            return MakeInvalid("only the leader can accept proposals");
+        }
+
+        LogEntry entry;
+        entry.index = log_.last_index() + 1;
+        entry.term = current_term();
+        entry.type = LogEntryType::COMMAND;
+        entry.payload = payload;
+
+        Status status = log_.Append(entry);
+        if (!status.ok())
+        {
+            return status;
+        }
+
+        // Update local peer progress to include the new entry.
+        auto it = peer_progress_.find(node_id_);
+        if (it != peer_progress_.end())
+        {
+            it->second.match_index = entry.index;
+            it->second.next_index = entry.index + 1;
+        }
+
+        // Proposal does not advance commit index or notify client —
+        // that requires quorum replication (T013) and apply (T023).
+        return Status::OK();
+    }
+
     common::Status RaftCore::HandleRequestVote(const RequestVoteRequest &request,
                                                RequestVoteResponse *response)
     {

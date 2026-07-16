@@ -151,7 +151,7 @@
   - Done: Full queues return BUSY, RESOURCE_EXHAUSTED, RETRY_LATER, or equivalent explicit statuses.
   - Parallel: No.
 
-- [ ] T022 [US1] P5-T02 Implement protocol loop, persistence worker, and persistence completion gating in `cross-platform-raft/src/raft/raft_runtime.cpp`
+- [X] T022 [US1] P5-T02 Implement protocol loop, persistence worker, and persistence completion gating in `cross-platform-raft/src/raft/raft_runtime.cpp`
   - Scope: Drive RaftCore from one protocol thread, dispatch ordered persistence work, release dependent Raft messages only after storage success, and fail dependent work on storage errors.
   - Dependencies: T021.
   - Done: gRPC-style callers can only enqueue work; they cannot mutate RaftCore.

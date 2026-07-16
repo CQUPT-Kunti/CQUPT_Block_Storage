@@ -117,6 +117,7 @@ namespace cpr::raft
         common::Status HandleAppendEntriesResponse(common::NodeId source_node_id,
                                                    const AppendEntriesResponse &response,
                                                    AppendResponseAction *action);
+        common::Status Propose(const OpaquePayload &payload);
         common::Status GetPeerProgress(common::NodeId target_node_id,
                                        PeerProgress *progress) const;
         common::Status GetApplyReadyRange(ApplyRange *range) const;

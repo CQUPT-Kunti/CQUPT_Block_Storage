@@ -213,7 +213,7 @@
 
 **Goal**: Add safe voter/learner membership changes for US4 without weakening quorum safety.
 
-- [ ] T031 [US4] P7-T01 Implement membership state and log entries in `cross-platform-raft/src/raft/raft_membership.h` and `raft_membership.cpp`
+- [X] T031 [US4] P7-T01 Implement membership state and log entries in `cross-platform-raft/src/raft/raft_membership.h` and `raft_membership.cpp`
   - Scope: Implement voters, learners, active transition state, membership log entries, bootstrap-only initial config, and persistence metadata.
   - Dependencies: T018, T024.
   - Done: Learners do not vote, count in quorum, or become leader; bootstrap config is not runtime truth after startup.

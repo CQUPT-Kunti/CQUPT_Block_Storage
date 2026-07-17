@@ -219,7 +219,7 @@
   - Done: Learners do not vote, count in quorum, or become leader; bootstrap config is not runtime truth after startup.
   - Parallel: No.
 
-- [ ] T032 [US4] P7-T02 Implement AddLearner and learner catch-up decisions in `cross-platform-raft/src/raft/raft_core.cpp` and `raft_membership.cpp`
+- [X] T032 [US4] P7-T02 Implement AddLearner and learner catch-up decisions in `cross-platform-raft/src/raft/raft_core.cpp` and `raft_membership.cpp`
   - Scope: Add learner membership proposals, learner replication tracking, log/snapshot catch-up decisions, and health/caught-up status.
   - Dependencies: T031, T028.
   - Done: New nodes join as learners and receive logs or snapshots without voting.

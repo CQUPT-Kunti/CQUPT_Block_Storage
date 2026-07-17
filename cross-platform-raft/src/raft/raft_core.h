@@ -2,10 +2,12 @@
 
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <vector>
 
 #include "common/status.h"
 #include "raft/raft_log.h"
+#include "raft/raft_membership.h"
 #include "raft/raft_message.h"
 #include "raft/raft_types.h"
 
@@ -23,6 +25,7 @@ namespace cpr::raft
             HardState hard_state;
             std::vector<common::NodeId> voter_ids;
             std::vector<common::NodeId> learner_ids;
+            std::optional<MembershipView> membership;
         };
 
         struct ApplyRange
@@ -96,6 +99,22 @@ namespace cpr::raft
             STEPPED_DOWN,
         };
 
+        enum class ReplicationMode
+        {
+            APPEND_ENTRIES,
+            INSTALL_SNAPSHOT,
+        };
+
+        struct LearnerState
+        {
+            bool healthy = false;
+            bool caught_up = false;
+            bool requires_snapshot = false;
+            common::LogIndex match_index = common::kInvalidLogIndex;
+            common::LogIndex next_index = common::kInvalidLogIndex;
+            common::LogIndex leader_commit = common::kInvalidLogIndex;
+        };
+
         RaftCore() = default;
 
         common::Status Initialize(const Options &options);
@@ -117,15 +136,29 @@ namespace cpr::raft
         common::Status HandleAppendEntriesResponse(common::NodeId source_node_id,
                                                    const AppendEntriesResponse &response,
                                                    AppendResponseAction *action);
+        common::Status HandleInstallSnapshotResponse(
+            common::NodeId source_node_id,
+            const InstallSnapshotResponse &response);
         common::Status Propose(const OpaquePayload &payload);
+        common::Status AddLearner(const RaftMember &learner,
+                                  common::LogIndex *log_index = nullptr);
+        common::Status ApplyCommittedMembershipEntry(const LogEntry &entry);
         common::Status ConfirmApplied(common::LogIndex index);
+        common::Status BuildInstallSnapshotForPeer(common::NodeId target_node_id,
+                                                   InstallSnapshotRequest *request);
+        common::Status GetReplicationModeForPeer(common::NodeId target_node_id,
+                                                 ReplicationMode *mode) const;
         common::Status GetPeerProgress(common::NodeId target_node_id,
                                        PeerProgress *progress) const;
+        common::Status GetLearnerState(common::NodeId target_node_id,
+                                       LearnerState *state) const;
+        common::Status GetMembershipView(MembershipView *view) const;
         common::Status GetApplyReadyRange(ApplyRange *range) const;
         common::Status GetOutput(RaftOutput *output) const;
         common::Status ConfirmPersistence(const PersistenceConfirmation &confirmation);
         common::Status ConfirmPersistence(bool hard_state_persisted,
                                           common::LogIndex stable_index);
+        common::Status UpdateSnapshotBoundary(const SnapshotMetadata &metadata);
 
         common::NodeId node_id() const noexcept;
         const std::vector<common::NodeId> &voter_ids() const noexcept;
@@ -158,6 +191,14 @@ namespace cpr::raft
         common::Status ValidateAppendEntriesRequest(const AppendEntriesRequest &request) const;
         common::Status ValidateAppendEntriesResponse(common::NodeId source_node_id,
                                                      const AppendEntriesResponse &response) const;
+        common::Status RequireLogIndex(common::LogIndex *log_index) const;
+        common::Status RequireInstallSnapshotRequest(InstallSnapshotRequest *request) const;
+        common::Status RequireReplicationMode(ReplicationMode *mode) const;
+        common::Status RequireLearnerState(LearnerState *state) const;
+        common::Status RequireMembershipView(MembershipView *view) const;
+        common::Status InitializeMembershipState(const Options &options);
+        common::Status SyncMembershipVectorsFromState();
+        common::Status UpdatePeerProgressForMembership();
         common::Status BecomeFollowerForRemote(common::Term term, common::NodeId leader_id);
         common::Status UpdateCurrentTerm(common::Term term);
         common::Status GetLastLogTerm(common::Term *term) const;
@@ -192,6 +233,7 @@ namespace cpr::raft
         RaftLog log_;
         std::vector<common::NodeId> voter_ids_;
         std::vector<common::NodeId> learner_ids_;
+        MembershipState membership_state_;
         std::map<common::NodeId, PeerProgress> peer_progress_;
         HardState persisted_hard_state_;
         struct PendingMessage

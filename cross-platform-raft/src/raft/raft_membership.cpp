@@ -35,6 +35,26 @@ namespace cpr::raft
                    lhs.address.port == rhs.address.port;
         }
 
+        bool SameAddress(const NodeAddress &lhs, const NodeAddress &rhs)
+        {
+            return lhs.host == rhs.host && lhs.port == rhs.port;
+        }
+
+        common::Status ValidateAddress(const NodeAddress &address)
+        {
+            if (address.host.empty())
+            {
+                return common::Status::InvalidArgument(
+                    "member address host must not be empty");
+            }
+            if (address.port == 0)
+            {
+                return common::Status::InvalidArgument(
+                    "member address port must be non-zero");
+            }
+            return common::Status::OK();
+        }
+
         common::Status ValidateMembers(const std::vector<RaftMember> &members,
                                        const char *label)
         {
@@ -53,6 +73,13 @@ namespace cpr::raft
                 {
                     return common::Status::InvalidArgument(
                         std::string(label) + " contains duplicate node id");
+                }
+                common::Status status = ValidateAddress(member.address);
+                if (!status.ok())
+                {
+                    return common::Status::InvalidArgument(
+                        std::string(label) + " contains invalid address: " +
+                        status.message());
                 }
             }
 
@@ -432,6 +459,80 @@ namespace cpr::raft
         view.has_active_transition = entry.has_active_transition;
         view.configuration_id = entry.configuration_id;
         return ValidateMembershipView(view);
+    }
+
+    common::Status BuildAddLearnerLogEntry(const MembershipState &state,
+                                           const RaftMember &learner,
+                                           MembershipLogEntry *entry)
+    {
+        if (entry == nullptr)
+        {
+            return common::Status::InvalidArgument(
+                "membership add learner entry output is null");
+        }
+        if (state.empty())
+        {
+            return common::Status::InvalidArgument(
+                "membership state is empty");
+        }
+        if (state.has_active_transition())
+        {
+            return common::Status::Busy(
+                "membership change already in progress");
+        }
+        if (learner.node_id == common::kInvalidNodeId)
+        {
+            return common::Status::InvalidArgument(
+                "learner node id must be valid");
+        }
+
+        common::Status status = ValidateAddress(learner.address);
+        if (!status.ok())
+        {
+            return status;
+        }
+        if (state.IsVoter(learner.node_id))
+        {
+            return common::Status::InvalidArgument(
+                "node already exists as voter");
+        }
+        if (state.IsLearner(learner.node_id))
+        {
+            return common::Status::InvalidArgument(
+                "node already exists as learner");
+        }
+
+        MembershipLogEntry candidate = state.ToLogEntry();
+        for (const RaftMember &member : candidate.voters)
+        {
+            if (SameAddress(member.address, learner.address))
+            {
+                return common::Status::InvalidArgument(
+                    "learner address conflicts with existing member");
+            }
+        }
+        for (const RaftMember &member : candidate.learners)
+        {
+            if (SameAddress(member.address, learner.address))
+            {
+                return common::Status::InvalidArgument(
+                    "learner address conflicts with existing member");
+            }
+        }
+
+        candidate.configuration_id += 1;
+        candidate.has_active_transition = false;
+        candidate.learners.push_back(learner);
+
+        MembershipLogEntry normalized;
+        status = NormalizeLogEntry(candidate, &normalized);
+        if (!status.ok())
+        {
+            return status;
+        }
+
+        *entry = std::move(normalized);
+        return common::Status::OK();
     }
 
     common::Status MembershipState::FromView(const MembershipView &view,

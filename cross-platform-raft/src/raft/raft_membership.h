@@ -59,6 +59,9 @@ namespace cpr::raft
 
     common::Status ValidateMembershipView(const MembershipView &view);
     common::Status ValidateMembershipLogEntry(const MembershipLogEntry &entry);
+    common::Status BuildAddLearnerLogEntry(const MembershipState &state,
+                                           const RaftMember &learner,
+                                           MembershipLogEntry *entry);
     common::Status EncodeMembershipLogEntry(const MembershipLogEntry &entry,
                                             OpaquePayload *payload);
     common::Status DecodeMembershipLogEntry(const OpaquePayload &payload,

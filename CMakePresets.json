@@ -6,6 +6,9 @@
             "displayName": "Debug Ninja low parallel",
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/build/linux",
+            "environment": {
+                "LD_LIBRARY_PATH": "/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:$penv{LD_LIBRARY_PATH}"
+            },
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
                 "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
@@ -47,6 +50,9 @@
             "name": "debug-ninja-low-parallel",
             "displayName": "Build Debug Ninja low parallel",
             "configurePreset": "debug-ninja-low-parallel",
+            "environment": {
+                "LD_LIBRARY_PATH": "/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:$penv{LD_LIBRARY_PATH}"
+            },
             "jobs": 2
         },
         {
@@ -75,6 +81,9 @@
             "name": "debug-tests",
             "displayName": "Run Debug tests",
             "configurePreset": "debug-ninja-low-parallel",
+            "environment": {
+                "LD_LIBRARY_PATH": "/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:$penv{LD_LIBRARY_PATH}"
+            },
             "output": {
                 "outputOnFailure": true
             }

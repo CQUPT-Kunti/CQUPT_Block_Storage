@@ -185,7 +185,7 @@
   - Done: Contracts match `contracts/interfaces-and-services.md` and avoid embedding consensus algorithms or business-only behavior in protobuf design.
   - Parallel: Yes, after stable runtime/core interfaces.
 
-- [ ] T027 [US1] P6-T02 Integrate protobuf/gRPC generation and libraries in `cross-platform-raft/CMakeLists.txt` and `cross-platform-raft/cmake/Dependencies.cmake`
+- [X] T027 [US1] P6-T02 Integrate protobuf/gRPC generation and libraries in `cross-platform-raft/CMakeLists.txt` and `cross-platform-raft/cmake/Dependencies.cmake`
   - Scope: Add generated source targets, link RPC/server/tests to generated protobuf/gRPC outputs, and preserve MSVC/GCC/Clang build compatibility.
   - Dependencies: T026, T002.
   - Done: Generated files are build artifacts; manually maintained `.h`/`.cpp` files remain paired in the same source directories.

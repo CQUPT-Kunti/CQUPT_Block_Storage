@@ -30,6 +30,63 @@ function(cpr_detect_dependencies target)
         target_link_libraries(${target} INTERFACE gRPC::grpc++)
     endif()
 
+    set(_cpr_protoc_available FALSE)
+    set(_cpr_protoc_executable "")
+    if(TARGET protobuf::protoc)
+        set(_cpr_protoc_available TRUE)
+        set(_cpr_protoc_executable "$<TARGET_FILE:protobuf::protoc>")
+    elseif(Protobuf_PROTOC_EXECUTABLE)
+        set(_cpr_protoc_available TRUE)
+        set(_cpr_protoc_executable "${Protobuf_PROTOC_EXECUTABLE}")
+    endif()
+    cpr_report_dependency("protoc" _cpr_protoc_available FALSE)
+
+    set(_cpr_grpc_cpp_plugin_available FALSE)
+    set(_cpr_grpc_cpp_plugin_executable "")
+    if(TARGET gRPC::grpc_cpp_plugin)
+        set(_cpr_grpc_cpp_plugin_available TRUE)
+        set(_cpr_grpc_cpp_plugin_executable "$<TARGET_FILE:gRPC::grpc_cpp_plugin>")
+    else()
+        find_program(_cpr_grpc_cpp_plugin_path grpc_cpp_plugin)
+        if(_cpr_grpc_cpp_plugin_path)
+            set(_cpr_grpc_cpp_plugin_available TRUE)
+            set(_cpr_grpc_cpp_plugin_executable "${_cpr_grpc_cpp_plugin_path}")
+        endif()
+    endif()
+    cpr_report_dependency("grpc_cpp_plugin" _cpr_grpc_cpp_plugin_available FALSE)
+
+    set(_cpr_proto_codegen_missing_components "")
+    if(NOT Protobuf_FOUND)
+        list(APPEND _cpr_proto_codegen_missing_components "Protobuf")
+    endif()
+    if(NOT gRPC_FOUND)
+        list(APPEND _cpr_proto_codegen_missing_components "gRPC")
+    endif()
+    if(NOT _cpr_protoc_available)
+        list(APPEND _cpr_proto_codegen_missing_components "protoc")
+    endif()
+    if(NOT _cpr_grpc_cpp_plugin_available)
+        list(APPEND _cpr_proto_codegen_missing_components "grpc_cpp_plugin")
+    endif()
+    set(_cpr_proto_codegen_available TRUE)
+    if(_cpr_proto_codegen_missing_components)
+        set(_cpr_proto_codegen_available FALSE)
+    endif()
+
+    set(CPR_PROTOC_AVAILABLE "${_cpr_protoc_available}" CACHE INTERNAL
+        "Whether protoc is available for generated protobuf code")
+    set(CPR_PROTOC_EXECUTABLE "${_cpr_protoc_executable}" CACHE INTERNAL
+        "protoc command or executable path")
+    set(CPR_GRPC_CPP_PLUGIN_AVAILABLE "${_cpr_grpc_cpp_plugin_available}"
+        CACHE INTERNAL "Whether grpc_cpp_plugin is available")
+    set(CPR_GRPC_CPP_PLUGIN_EXECUTABLE "${_cpr_grpc_cpp_plugin_executable}"
+        CACHE INTERNAL "grpc_cpp_plugin executable path")
+    set(CPR_PROTO_CODEGEN_AVAILABLE "${_cpr_proto_codegen_available}"
+        CACHE INTERNAL "Whether protobuf and gRPC code generation can run")
+    set(CPR_PROTO_CODEGEN_MISSING_COMPONENTS
+        "${_cpr_proto_codegen_missing_components}" CACHE INTERNAL
+        "Missing components required for protobuf and gRPC code generation")
+
     find_package(GTest CONFIG QUIET)
     if(NOT GTest_FOUND)
         find_package(GTest QUIET)

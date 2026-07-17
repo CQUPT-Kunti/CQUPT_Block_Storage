@@ -197,7 +197,7 @@
   - Done: Transport has real gRPC and later simulated implementations behind the same stable interface.
   - Parallel: No.
 
-- [ ] T029 [US1] P6-T04 Implement Raft and Metadata RPC service adapters in `cross-platform-raft/src/rpc/raft_rpc_service.h/.cpp` and `metadata_rpc_service.h/.cpp`
+- [X] T029 [US1] P6-T04 Implement Raft and Metadata RPC service adapters in `cross-platform-raft/src/rpc/raft_rpc_service.h/.cpp` and `metadata_rpc_service.h/.cpp`
   - Scope: Implement RequestVote, AppendEntries, InstallSnapshot, Propose, Query, GetLeader, and GetStatus adapters with validation, conversion, queue insertion, timeout handling, error mapping, and NOT_LEADER leader-address responses.
   - Dependencies: T027, T028.
   - Done: RPC code does not contain election, quorum, conflict, or direct RaftCore mutation logic.

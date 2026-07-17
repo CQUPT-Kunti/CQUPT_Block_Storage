@@ -146,3 +146,27 @@ target_include_directories(cpr_raft_runtime_tests
 gtest_discover_tests(cpr_raft_runtime_tests
     TEST_PREFIX raft_runtime.
 )
+
+if(TARGET cpr_rpc)
+    add_executable(cpr_raft_rpc_tests
+        raft_rpc_service_test.cpp
+    )
+
+    target_link_libraries(cpr_raft_rpc_tests
+        PRIVATE
+            ${CPR_GTEST_LINK_TARGET}
+            cpr_rpc
+            cpr_project_options
+            cpr_project_warnings
+            cpr_platform_options
+    )
+
+    target_include_directories(cpr_raft_rpc_tests
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/src
+    )
+
+    gtest_discover_tests(cpr_raft_rpc_tests
+        TEST_PREFIX raft_rpc.
+    )
+endif()

@@ -35,6 +35,19 @@ namespace cpr::raft
             return common::Status::ResourceExhausted(std::move(message));
         }
 
+        RaftMessage BuildInstallSnapshotResponseMessage(
+            common::NodeId local_node_id,
+            common::NodeId leader_id,
+            const InstallSnapshotResponse &response)
+        {
+            RaftMessage message;
+            message.type = RaftMessageType::INSTALL_SNAPSHOT_RESPONSE;
+            message.source_node_id = local_node_id;
+            message.target_node_id = leader_id;
+            message.payload = response;
+            return message;
+        }
+
     } // namespace
 
     // ===================================================================
@@ -501,6 +514,55 @@ namespace cpr::raft
                 event.source_node_id, *resp, &action);
             break;
         }
+        case RaftMessageType::INSTALL_SNAPSHOT_REQUEST:
+        {
+            const auto *req = std::get_if<InstallSnapshotRequest>(&msg.payload);
+            if (req == nullptr)
+                return;
+
+            InstallSnapshotResponse response;
+            response.term = core_->current_term();
+            response.success = false;
+            response.last_included_index = common::kInvalidLogIndex;
+
+            if (req->term >= core_->current_term() &&
+                core_->role() != RaftRole::LEARNER)
+            {
+                status = core_->BecomeFollower(req->term, req->leader_id);
+                if (!status.ok())
+                    return;
+                response.term = core_->current_term();
+            }
+
+            if (req->term < response.term)
+            {
+                std::vector<RaftMessage> replies;
+                replies.push_back(BuildInstallSnapshotResponseMessage(
+                    core_->node_id(), req->leader_id, response));
+                (void)DistributeOutputMessages(std::move(replies));
+                return;
+            }
+
+            SnapshotData snapshot;
+            snapshot.metadata = req->metadata;
+            snapshot.payload = req->payload;
+
+            status = storage_->SaveSnapshot(snapshot);
+            if (status.ok())
+            {
+                response.success = true;
+                response.last_included_index =
+                    req->metadata.last_included_index;
+            }
+
+            std::vector<RaftMessage> replies;
+            replies.push_back(BuildInstallSnapshotResponseMessage(
+                core_->node_id(), req->leader_id, response));
+            (void)DistributeOutputMessages(std::move(replies));
+            return;
+        }
+        case RaftMessageType::INSTALL_SNAPSHOT_RESPONSE:
+            return;
         default:
             return;
         }

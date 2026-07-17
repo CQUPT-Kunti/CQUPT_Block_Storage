@@ -49,6 +49,7 @@ add_subdirectory(src/config)
 add_subdirectory(src/platform)
 add_subdirectory(src/raft)
 add_subdirectory(src/transport)
+add_subdirectory(src/rpc)
 add_subdirectory(src/server)
 add_subdirectory(tests)
 

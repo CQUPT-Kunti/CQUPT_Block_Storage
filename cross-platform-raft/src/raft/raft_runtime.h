@@ -6,6 +6,7 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <unordered_map>
 #include <variant>
@@ -60,9 +61,17 @@ namespace cpr::raft
 
     struct MembershipChangeEvent
     {
-        std::vector<RaftMember> added_voters;
-        std::vector<RaftMember> added_learners;
-        std::vector<common::NodeId> removed_nodes;
+        enum class Kind : std::uint8_t
+        {
+            ADD_LEARNER,
+            PROMOTE_LEARNER,
+            REMOVE_MEMBER,
+        };
+
+        Kind kind = Kind::ADD_LEARNER;
+        std::string request_id;
+        RaftMember member;
+        common::NodeId target_node_id = common::kInvalidNodeId;
     };
 
     struct PersistenceCompletionEvent
@@ -120,6 +129,17 @@ namespace cpr::raft
         std::uint64_t proposal_id = 0;
         common::LogIndex log_index = common::kInvalidLogIndex;
         common::Status status;
+        bool final_result = false;
+    };
+
+    struct MembershipChangeResult
+    {
+        std::string request_id;
+        common::LogIndex log_index = common::kInvalidLogIndex;
+        common::Term term = common::kInitialTerm;
+        common::Status status;
+        common::NodeId leader_id = common::kInvalidNodeId;
+        NodeAddress leader_address;
         bool final_result = false;
     };
 
@@ -189,6 +209,8 @@ namespace cpr::raft
         // since the last call to ClearProposalResultOverflow().
         bool HasProposalResultOverflow() const;
         void ClearProposalResultOverflow();
+        bool TryTakeMembershipChangeResult(const std::string &request_id,
+                                           MembershipChangeResult *result);
 
         // --- Query ---
 
@@ -208,6 +230,9 @@ namespace cpr::raft
         void EmitProposalResult(std::uint64_t proposal_id,
                                 common::LogIndex log_index,
                                 common::Status status, bool final_result);
+        void EmitMembershipChangeResult(MembershipChangeResult result);
+        common::Status ResolveLeaderHint(common::NodeId *leader_id,
+                                         NodeAddress *leader_address) const;
         bool EmitPersistenceCompletion(PersistenceCompletionEvent &&event);
         bool EmitApplyCompletion(ApplyCompletionEvent &&event);
         void CloseAllPeerQueues();
@@ -221,6 +246,7 @@ namespace cpr::raft
         void ProcessProposal(const ProposalEvent &event);
         void ProcessPersistenceCompletion(const PersistenceCompletionEvent &event);
         void ProcessMembershipChange();
+        void ProcessMembershipChange(const MembershipChangeEvent &event);
         void ProcessApplyCompletion(const ApplyCompletionEvent &event);
 
         common::Status DrainCoreOutput();
@@ -256,6 +282,7 @@ namespace cpr::raft
         };
         ResultQueue proposal_results_;
         mutable std::mutex results_mutex_;
+        std::deque<MembershipChangeResult> membership_results_;
 
         std::thread protocol_thread_;
         std::thread persistence_thread_;
@@ -266,6 +293,15 @@ namespace cpr::raft
         bool apply_stopped_ = false;
 
         std::map<std::uint64_t, common::LogIndex> pending_proposals_;
+        struct PendingMembershipChange
+        {
+            MembershipChangeEvent::Kind kind = MembershipChangeEvent::Kind::ADD_LEARNER;
+            std::string request_id;
+            common::LogIndex current_log_index = common::kInvalidLogIndex;
+            bool awaiting_finalization = false;
+            bool final_phase_started = false;
+        };
+        std::map<common::LogIndex, PendingMembershipChange> pending_membership_changes_;
         common::LogIndex next_apply_schedule_ = common::kInvalidLogIndex;
     };
 

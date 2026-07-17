@@ -17,6 +17,8 @@ namespace cpr::raft
         std::vector<RaftMember> voters;
         std::vector<RaftMember> learners;
         bool has_active_transition = false;
+        std::vector<RaftMember> next_voters;
+        std::vector<RaftMember> next_learners;
     };
 
     class MembershipState
@@ -44,6 +46,8 @@ namespace cpr::raft
 
         const std::vector<RaftMember> &voters() const noexcept;
         const std::vector<RaftMember> &learners() const noexcept;
+        const std::vector<RaftMember> &next_voters() const noexcept;
+        const std::vector<RaftMember> &next_learners() const noexcept;
         bool has_active_transition() const noexcept;
         std::uint64_t configuration_id() const noexcept;
 
@@ -53,6 +57,8 @@ namespace cpr::raft
     private:
         std::vector<RaftMember> voters_;
         std::vector<RaftMember> learners_;
+        std::vector<RaftMember> next_voters_;
+        std::vector<RaftMember> next_learners_;
         bool has_active_transition_ = false;
         std::uint64_t configuration_id_ = 0;
     };
@@ -68,6 +74,8 @@ namespace cpr::raft
     common::Status BuildRemoveMemberLogEntry(const MembershipState &state,
                                              common::NodeId member_node_id,
                                              MembershipLogEntry *entry);
+    common::Status BuildFinalizeMembershipLogEntry(const MembershipState &state,
+                                                   MembershipLogEntry *entry);
     common::Status EncodeMembershipLogEntry(const MembershipLogEntry &entry,
                                             OpaquePayload *payload);
     common::Status DecodeMembershipLogEntry(const OpaquePayload &payload,

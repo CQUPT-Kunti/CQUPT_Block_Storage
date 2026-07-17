@@ -146,7 +146,12 @@ namespace cpr::raft
                                                     RaftRole::LEADER,
                                                     {1},
                                                     {},
-                                                    MakeMembership(1, true)));
+                                                    [] {
+                                                        MembershipView view = MakeMembership(1, true);
+                                                        view.next_voters = view.voters;
+                                                        view.next_learners = view.learners;
+                                                        return view;
+                                                    }()));
             EXPECT_EQ(blocked.AddLearner(MakeMember(3, "10.0.0.3")).code(),
                       StatusCode::kBusy);
 

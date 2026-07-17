@@ -5,6 +5,7 @@ endif()
 
 add_library(cpr_rpc
     raft_rpc_service.cpp
+    metadata_rpc_service.cpp
 )
 
 target_include_directories(cpr_rpc

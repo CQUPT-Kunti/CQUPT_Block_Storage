@@ -48,6 +48,14 @@ namespace cpr::raft
             entry.learners = {
                 MakeMember(5, "10.0.0.5"),
             };
+            if (has_active_transition)
+            {
+                entry.next_voters = {
+                    MakeMember(1, "10.0.0.1"),
+                    MakeMember(3, "10.0.0.3"),
+                    MakeMember(5, "10.0.0.5"),
+                };
+            }
             return entry;
         }
 
@@ -125,6 +133,8 @@ namespace cpr::raft
         {
             MembershipView view = MakeStableView(12);
             view.has_active_transition = true;
+            view.next_voters = view.voters;
+            view.next_learners = view.learners;
 
             MembershipState state;
             ASSERT_TRUE(MembershipState::FromView(view, &state).ok());
@@ -231,6 +241,8 @@ namespace cpr::raft
             MembershipView view = MakeStableView(41);
             view.has_active_transition = true;
             view.learners.push_back(MakeMember(6, "10.0.0.6"));
+            view.next_voters = view.voters;
+            view.next_learners = view.learners;
 
             MembershipState state;
             ASSERT_TRUE(MembershipState::FromView(view, &state).ok());

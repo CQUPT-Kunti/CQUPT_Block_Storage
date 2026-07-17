@@ -231,7 +231,7 @@
   - Done: Membership changes are committed through the Raft log and unsafe automatic membership modification is impossible.
   - Parallel: No.
 
-- [ ] T034 [US4] P7-T04 Implement two-phase or equivalent safe configuration transition and membership RPC adapters in `cross-platform-raft/src/rpc/metadata_rpc_service.cpp`
+- [X] T034 [US4] P7-T04 Implement two-phase or equivalent safe configuration transition and membership RPC adapters in `cross-platform-raft/src/rpc/metadata_rpc_service.cpp`
   - Scope: Add AddLearner, PromoteLearner, and RemoveMember request flow through Metadata/Raft runtime queues and membership log application.
   - Dependencies: T033, T029.
   - Done: Runtime exposes membership results through RPC without moving consensus rules into RPC.

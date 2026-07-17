@@ -367,6 +367,35 @@ namespace cpr::raft
         return AppendMembershipChangeProposal(membership_entry, log_index);
     }
 
+    common::Status RaftCore::FinalizeMembershipChange(LogIndex *log_index)
+    {
+        if (!initialized_)
+        {
+            return MakeInvalid("raft core is not initialized");
+        }
+        if (role_ != RaftRole::LEADER)
+        {
+            return MakeInvalid("only the leader can finalize a membership change");
+        }
+        if (!membership_state_.has_active_transition())
+        {
+            return MakeInvalid("membership transition is not active");
+        }
+        if (HasPendingMembershipChange())
+        {
+            return Status::Busy("another membership change is still pending");
+        }
+
+        MembershipLogEntry membership_entry;
+        Status status = BuildFinalizeMembershipLogEntry(membership_state_,
+                                                        &membership_entry);
+        if (!status.ok())
+        {
+            return status;
+        }
+        return AppendMembershipChangeProposal(membership_entry, log_index);
+    }
+
     common::Status RaftCore::AppendMembershipChangeProposal(
         const MembershipLogEntry &membership_entry,
         LogIndex *log_index)
@@ -442,6 +471,31 @@ namespace cpr::raft
 
         std::vector<NodeId> candidate_voters = MemberIds(candidate_state.voters());
         std::vector<NodeId> candidate_learners = MemberIds(candidate_state.learners());
+        if (candidate_state.has_active_transition())
+        {
+            for (NodeId node_id : MemberIds(candidate_state.next_voters()))
+            {
+                if (!ContainsNode(candidate_voters, node_id))
+                {
+                    candidate_voters.push_back(node_id);
+                }
+                candidate_learners.erase(
+                    std::remove(candidate_learners.begin(),
+                                candidate_learners.end(),
+                                node_id),
+                    candidate_learners.end());
+            }
+            for (NodeId node_id : MemberIds(candidate_state.next_learners()))
+            {
+                if (!ContainsNode(candidate_learners, node_id) &&
+                    !ContainsNode(candidate_voters, node_id))
+                {
+                    candidate_learners.push_back(node_id);
+                }
+            }
+            std::sort(candidate_voters.begin(), candidate_voters.end());
+            std::sort(candidate_learners.begin(), candidate_learners.end());
+        }
         std::map<NodeId, PeerProgress> candidate_progress = peer_progress_;
         const LogIndex next_index = log_.last_index() + 1;
 
@@ -1656,8 +1710,8 @@ namespace cpr::raft
             return Status::OK();
         }
 
-        voter_ids_ = MemberIds(membership_state_.voters());
-        learner_ids_ = MemberIds(membership_state_.learners());
+        voter_ids_ = TransitionVoterIds();
+        learner_ids_ = TransitionLearnerIds();
         return Status::OK();
     }
 
@@ -1891,44 +1945,125 @@ namespace cpr::raft
 
     common::Status RaftCore::TryAdvanceCommitIndex()
     {
-        std::vector<LogIndex> matches;
-        matches.reserve(voter_ids_.size());
-        for (NodeId node_id : voter_ids_)
+        for (LogIndex candidate = log_.last_index();
+             candidate > log_.commit_index();
+             --candidate)
         {
-            const PeerProgress *progress = nullptr;
-            Status status = FindPeerProgress(node_id, &progress);
+            Term candidate_term = common::kInitialTerm;
+            Status status = log_.GetTerm(candidate, &candidate_term);
             if (!status.ok())
             {
                 return status;
             }
-            matches.push_back(progress->match_index);
-        }
+            if (candidate_term != current_term())
+            {
+                continue;
+            }
 
-        std::sort(matches.begin(), matches.end());
-        const LogIndex candidate = matches[matches.size() / 2];
-        if (candidate <= log_.commit_index())
-        {
+            if (membership_state_.has_active_transition())
+            {
+                if (!HasJointQuorumAt(candidate))
+                {
+                    continue;
+                }
+            }
+            else
+            {
+                std::size_t matches = 0;
+                for (NodeId node_id : voter_ids_)
+                {
+                    const PeerProgress *progress = nullptr;
+                    status = FindPeerProgress(node_id, &progress);
+                    if (!status.ok())
+                    {
+                        return status;
+                    }
+                    if (progress->match_index >= candidate)
+                    {
+                        ++matches;
+                    }
+                }
+                if (matches < ((voter_ids_.size() / 2U) + 1U))
+                {
+                    continue;
+                }
+            }
+
+            status = log_.AdvanceCommitTo(candidate);
+            if (!status.ok())
+            {
+                return status;
+            }
+            hard_state_.commit_index = log_.commit_index();
             return Status::OK();
         }
-
-        Term candidate_term = common::kInitialTerm;
-        Status status = log_.GetTerm(candidate, &candidate_term);
-        if (!status.ok())
-        {
-            return status;
-        }
-        if (candidate_term != current_term())
-        {
-            return Status::OK();
-        }
-
-        status = log_.AdvanceCommitTo(candidate);
-        if (!status.ok())
-        {
-            return status;
-        }
-        hard_state_.commit_index = log_.commit_index();
         return Status::OK();
+    }
+
+    bool RaftCore::HasJointQuorumAt(LogIndex index) const
+    {
+        const auto count_for = [this, index](const std::vector<NodeId> &nodes)
+        {
+            std::size_t count = 0;
+            for (NodeId node_id : nodes)
+            {
+                const PeerProgress *progress = nullptr;
+                if (FindPeerProgress(node_id, &progress).ok() &&
+                    progress->match_index >= index)
+                {
+                    ++count;
+                }
+            }
+            return count;
+        };
+
+        const std::vector<NodeId> old_voters = MemberIds(membership_state_.voters());
+        const std::vector<NodeId> new_voters = MemberIds(membership_state_.next_voters());
+        return count_for(old_voters) >= ((old_voters.size() / 2U) + 1U) &&
+               count_for(new_voters) >= ((new_voters.size() / 2U) + 1U);
+    }
+
+    std::vector<NodeId> RaftCore::TransitionVoterIds() const
+    {
+        std::vector<NodeId> voters = MemberIds(membership_state_.voters());
+        if (!membership_state_.has_active_transition())
+        {
+            return voters;
+        }
+
+        for (NodeId node_id : MemberIds(membership_state_.next_voters()))
+        {
+            if (!ContainsNode(voters, node_id))
+            {
+                voters.push_back(node_id);
+            }
+        }
+        std::sort(voters.begin(), voters.end());
+        return voters;
+    }
+
+    std::vector<NodeId> RaftCore::TransitionLearnerIds() const
+    {
+        std::vector<NodeId> learners = MemberIds(membership_state_.learners());
+        if (!membership_state_.has_active_transition())
+        {
+            return learners;
+        }
+
+        for (NodeId node_id : MemberIds(membership_state_.next_voters()))
+        {
+            learners.erase(std::remove(learners.begin(), learners.end(), node_id),
+                           learners.end());
+        }
+        for (NodeId node_id : MemberIds(membership_state_.next_learners()))
+        {
+            if (!ContainsNode(learners, node_id))
+            {
+                learners.push_back(node_id);
+            }
+        }
+        std::sort(learners.begin(), learners.end());
+        return learners;
     }
 
     common::Status RaftCore::StageMessage(const RaftMessage &message,

@@ -151,6 +151,7 @@ add_executable(cpr_raft_membership_tests
     raft_membership_state_test.cpp
     raft_membership_add_learner_test.cpp
     raft_membership_change_test.cpp
+    raft_membership_transition_test.cpp
 )
 
 target_link_libraries(cpr_raft_membership_tests
@@ -174,6 +175,7 @@ gtest_discover_tests(cpr_raft_membership_tests
 if(TARGET cpr_rpc)
     add_executable(cpr_raft_rpc_tests
         raft_rpc_service_test.cpp
+        metadata_rpc_service_test.cpp
     )
 
     target_link_libraries(cpr_raft_rpc_tests

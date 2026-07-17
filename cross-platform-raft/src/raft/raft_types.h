@@ -44,6 +44,8 @@ struct MembershipView {
     std::vector<RaftMember> learners;
     bool has_active_transition = false;
     std::uint64_t configuration_id = 0;
+    std::vector<RaftMember> next_voters;
+    std::vector<RaftMember> next_learners;
 };
 
 struct LogEntry {

@@ -90,6 +90,13 @@ namespace cpr::raft
             ASSERT_NE(core, nullptr);
             ASSERT_TRUE(core->AddLearner(MakeMember(learner_id, host)).ok());
             const LogIndex membership_index = core->log().last_index();
+            for (NodeId voter_id : core->voter_ids())
+            {
+                if (voter_id != core->node_id())
+                {
+                    MarkPeerActive(core, voter_id);
+                }
+            }
             ASSERT_TRUE(core->ApplyCommittedMembershipEntry(
                 GetEntry(*core, membership_index)).ok());
             ASSERT_TRUE(core->ConfirmApplied(membership_index).ok());
@@ -116,10 +123,12 @@ namespace cpr::raft
                                                    MakeMembership(1, {MakeMember(1, "10.0.0.1")})));
             CommitLearnerAdd(&leader, 2);
             CatchUpLearner(&leader, 2);
+            ASSERT_TRUE(leader.ConfirmApplied(2).ok());
 
             LogIndex proposal_index = 0;
             ASSERT_TRUE(leader.PromoteLearner(2, &proposal_index).ok());
             EXPECT_EQ(GetEntry(leader, proposal_index).type, LogEntryType::MEMBERSHIP_CHANGE);
+            MarkPeerActive(&leader, 2);
 
             MembershipView before_apply;
             ASSERT_TRUE(leader.GetMembershipView(&before_apply).ok());
@@ -133,15 +142,34 @@ namespace cpr::raft
                                     { return member.node_id == 2; }));
 
             ASSERT_TRUE(leader.ApplyCommittedMembershipEntry(GetEntry(leader, proposal_index)).ok());
+            ASSERT_TRUE(leader.ConfirmApplied(proposal_index).ok());
 
             MembershipView after_apply;
             ASSERT_TRUE(leader.GetMembershipView(&after_apply).ok());
-            EXPECT_TRUE(std::any_of(after_apply.voters.begin(),
-                                    after_apply.voters.end(),
+            EXPECT_TRUE(after_apply.has_active_transition);
+            EXPECT_TRUE(std::any_of(after_apply.learners.begin(),
+                                     after_apply.learners.end(),
+                                     [](const RaftMember &member)
+                                     { return member.node_id == 2; }));
+            EXPECT_TRUE(std::any_of(after_apply.next_voters.begin(),
+                                    after_apply.next_voters.end(),
                                     [](const RaftMember &member)
                                     { return member.node_id == 2; }));
-            EXPECT_FALSE(std::any_of(after_apply.learners.begin(),
-                                     after_apply.learners.end(),
+
+            LogIndex final_index = 0;
+            ASSERT_TRUE(leader.FinalizeMembershipChange(&final_index).ok());
+            MarkPeerActive(&leader, 2);
+            ASSERT_TRUE(leader.ApplyCommittedMembershipEntry(GetEntry(leader, final_index)).ok());
+            ASSERT_TRUE(leader.ConfirmApplied(final_index).ok());
+
+            MembershipView final_view;
+            ASSERT_TRUE(leader.GetMembershipView(&final_view).ok());
+            EXPECT_TRUE(std::any_of(final_view.voters.begin(),
+                                    final_view.voters.end(),
+                                    [](const RaftMember &member)
+                                    { return member.node_id == 2; }));
+            EXPECT_FALSE(std::any_of(final_view.learners.begin(),
+                                     final_view.learners.end(),
                                      [](const RaftMember &member)
                                      { return member.node_id == 2; }));
 
@@ -218,6 +246,7 @@ namespace cpr::raft
 
             LogIndex remove_learner_index = 0;
             ASSERT_TRUE(leader.RemoveMember(2, &remove_learner_index).ok());
+            MarkPeerActive(&leader, 3);
             ASSERT_TRUE(leader.ApplyCommittedMembershipEntry(GetEntry(leader, remove_learner_index)).ok());
             ASSERT_TRUE(leader.ConfirmApplied(remove_learner_index).ok());
             PeerProgress progress;
@@ -225,6 +254,7 @@ namespace cpr::raft
 
             LogIndex remove_voter_index = 0;
             ASSERT_TRUE(leader.RemoveMember(3, &remove_voter_index).ok());
+            MarkPeerActive(&leader, 3);
 
             MembershipView before_apply;
             ASSERT_TRUE(leader.GetMembershipView(&before_apply).ok());
@@ -234,10 +264,24 @@ namespace cpr::raft
                                     { return member.node_id == 3; }));
 
             ASSERT_TRUE(leader.ApplyCommittedMembershipEntry(GetEntry(leader, remove_voter_index)).ok());
+            ASSERT_TRUE(leader.ConfirmApplied(remove_voter_index).ok());
             MembershipView after_apply;
             ASSERT_TRUE(leader.GetMembershipView(&after_apply).ok());
-            EXPECT_FALSE(std::any_of(after_apply.voters.begin(),
-                                     after_apply.voters.end(),
+            EXPECT_TRUE(after_apply.has_active_transition);
+            EXPECT_FALSE(std::any_of(after_apply.next_voters.begin(),
+                                     after_apply.next_voters.end(),
+                                     [](const RaftMember &member)
+                                     { return member.node_id == 3; }));
+
+            LogIndex final_index = 0;
+            ASSERT_TRUE(leader.FinalizeMembershipChange(&final_index).ok());
+            MarkPeerActive(&leader, 3);
+            ASSERT_TRUE(leader.ApplyCommittedMembershipEntry(GetEntry(leader, final_index)).ok());
+            ASSERT_TRUE(leader.ConfirmApplied(final_index).ok());
+            MembershipView final_view;
+            ASSERT_TRUE(leader.GetMembershipView(&final_view).ok());
+            EXPECT_FALSE(std::any_of(final_view.voters.begin(),
+                                     final_view.voters.end(),
                                      [](const RaftMember &member)
                                      { return member.node_id == 3; }));
             EXPECT_EQ(leader.GetPeerProgress(3, &progress).code(), StatusCode::kNotFound);
@@ -341,7 +385,17 @@ namespace cpr::raft
 
             LogIndex index = 0;
             ASSERT_TRUE(leader.RemoveMember(1, &index).ok());
+            MarkPeerActive(&leader, 2);
             ASSERT_TRUE(leader.ApplyCommittedMembershipEntry(GetEntry(leader, index)).ok());
+            ASSERT_TRUE(leader.ConfirmApplied(index).ok());
+
+            EXPECT_NE(leader.role(), RaftRole::LEARNER);
+
+            LogIndex final_index = 0;
+            ASSERT_TRUE(leader.FinalizeMembershipChange(&final_index).ok());
+            MarkPeerActive(&leader, 2);
+            ASSERT_TRUE(leader.ApplyCommittedMembershipEntry(GetEntry(leader, final_index)).ok());
+            ASSERT_TRUE(leader.ConfirmApplied(final_index).ok());
 
             EXPECT_EQ(leader.role(), RaftRole::LEARNER);
             EXPECT_EQ(leader.leader_id(), common::kInvalidNodeId);

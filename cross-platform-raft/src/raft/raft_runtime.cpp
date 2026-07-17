@@ -232,15 +232,15 @@ namespace cpr::raft
     }
 
     common::Status RaftRuntime::EnqueueMembershipChange(
-        const MembershipChangeEvent &)
+        const MembershipChangeEvent &event)
     {
-        return NotSupported("membership change is not implemented");
+        return Enqueue(RuntimeEvent(event));
     }
 
     common::Status RaftRuntime::EnqueueMembershipChange(
-        MembershipChangeEvent &&)
+        MembershipChangeEvent &&event)
     {
-        return NotSupported("membership change is not implemented");
+        return Enqueue(RuntimeEvent(std::move(event)));
     }
 
     common::Status RaftRuntime::EnqueuePersistenceCompletion(
@@ -333,6 +333,29 @@ namespace cpr::raft
     {
         std::lock_guard<std::mutex> lock(results_mutex_);
         proposal_results_.overflow = false;
+    }
+
+    bool RaftRuntime::TryTakeMembershipChangeResult(
+        const std::string &request_id,
+        MembershipChangeResult *result)
+    {
+        if (result == nullptr)
+        {
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(results_mutex_);
+        for (auto it = membership_results_.begin();
+             it != membership_results_.end();
+             ++it)
+        {
+            if (it->request_id == request_id)
+            {
+                *result = std::move(*it);
+                membership_results_.erase(it);
+                return true;
+            }
+        }
+        return false;
     }
 
     // ===================================================================
@@ -449,7 +472,7 @@ namespace cpr::raft
                 ProcessApplyCompletion(
                     std::get<ApplyCompletionEvent>(event));
             else if (std::holds_alternative<MembershipChangeEvent>(event))
-                ProcessMembershipChange();
+                ProcessMembershipChange(std::get<MembershipChangeEvent>(event));
             else if (std::holds_alternative<ShutdownEvent>(event))
                 break;
         }
@@ -604,14 +627,98 @@ namespace cpr::raft
 
     void RaftRuntime::ProcessMembershipChange()
     {
-        // Not implemented.
+    }
+
+    void RaftRuntime::ProcessMembershipChange(const MembershipChangeEvent &event)
+    {
+        common::NodeId leader_id = common::kInvalidNodeId;
+        NodeAddress leader_address;
+        (void)ResolveLeaderHint(&leader_id, &leader_address);
+
+        auto reject = [&](common::Status status)
+        {
+            MembershipChangeResult result;
+            result.request_id = event.request_id;
+            result.status = std::move(status);
+            result.term = core_->current_term();
+            result.leader_id = leader_id;
+            result.leader_address = leader_address;
+            result.final_result = true;
+            EmitMembershipChangeResult(std::move(result));
+        };
+
+        if (event.request_id.empty())
+        {
+            reject(common::Status::InvalidArgument("membership request id must not be empty"));
+            return;
+        }
+        if (core_->role() != RaftRole::LEADER)
+        {
+            reject(common::Status::NotFound("not leader"));
+            return;
+        }
+        if (!pending_membership_changes_.empty())
+        {
+            reject(common::Status::Busy("membership change already in progress"));
+            return;
+        }
+
+        common::LogIndex log_index = common::kInvalidLogIndex;
+        common::Status status = common::Status::OK();
+        switch (event.kind)
+        {
+        case MembershipChangeEvent::Kind::ADD_LEARNER:
+            status = core_->AddLearner(event.member, &log_index);
+            break;
+        case MembershipChangeEvent::Kind::PROMOTE_LEARNER:
+            status = core_->PromoteLearner(event.target_node_id, &log_index);
+            break;
+        case MembershipChangeEvent::Kind::REMOVE_MEMBER:
+            status = core_->RemoveMember(event.target_node_id, &log_index);
+            break;
+        }
+        if (!status.ok())
+        {
+            reject(status);
+            return;
+        }
+
+        PendingMembershipChange pending;
+        pending.kind = event.kind;
+        pending.request_id = event.request_id;
+        pending.current_log_index = log_index;
+        pending.awaiting_finalization =
+            event.kind != MembershipChangeEvent::Kind::ADD_LEARNER;
+        pending_membership_changes_.emplace(log_index, std::move(pending));
+        (void)DrainCoreOutput();
     }
 
     void RaftRuntime::ProcessApplyCompletion(
         const ApplyCompletionEvent &event)
     {
+        LogEntry applied_entry;
+        const common::Status entry_status =
+            core_->log().GetEntry(event.applied_index, &applied_entry);
+        if (!entry_status.ok())
+        {
+            return;
+        }
+
         if (!event.status.ok())
         {
+            auto membership_it = pending_membership_changes_.find(event.applied_index);
+            if (membership_it != pending_membership_changes_.end())
+            {
+                MembershipChangeResult result;
+                result.request_id = membership_it->second.request_id;
+                result.log_index = event.applied_index;
+                result.term = core_->current_term();
+                result.status = event.status;
+                ResolveLeaderHint(&result.leader_id, &result.leader_address);
+                result.final_result = true;
+                EmitMembershipChangeResult(std::move(result));
+                pending_membership_changes_.erase(membership_it);
+            }
             if (event.proposal_id != 0)
             {
                 EmitProposalResult(event.proposal_id,
@@ -625,10 +732,81 @@ namespace cpr::raft
         if (event.applied_index != expected)
             return;
 
+        if (applied_entry.type == LogEntryType::MEMBERSHIP_CHANGE)
+        {
+            const common::Status membership_status =
+                core_->ApplyCommittedMembershipEntry(applied_entry);
+            if (!membership_status.ok())
+            {
+                auto membership_it =
+                    pending_membership_changes_.find(event.applied_index);
+                if (membership_it != pending_membership_changes_.end())
+                {
+                    MembershipChangeResult result;
+                    result.request_id = membership_it->second.request_id;
+                    result.log_index = event.applied_index;
+                    result.term = core_->current_term();
+                    result.status = membership_status;
+                    ResolveLeaderHint(&result.leader_id, &result.leader_address);
+                    result.final_result = true;
+                    EmitMembershipChangeResult(std::move(result));
+                    pending_membership_changes_.erase(membership_it);
+                }
+                return;
+            }
+        }
+
         const common::Status confirm_status =
             core_->ConfirmApplied(event.applied_index);
         if (!confirm_status.ok())
             return;
+
+        auto membership_it = pending_membership_changes_.find(event.applied_index);
+        if (membership_it != pending_membership_changes_.end())
+        {
+            if (membership_it->second.awaiting_finalization &&
+                core_->role() == RaftRole::LEADER &&
+                core_->hard_state().commit_index >= event.applied_index)
+            {
+                common::LogIndex final_log_index = common::kInvalidLogIndex;
+                const common::Status finalize_status =
+                    core_->FinalizeMembershipChange(&final_log_index);
+                if (finalize_status.ok())
+                {
+                    PendingMembershipChange next = membership_it->second;
+                    next.current_log_index = final_log_index;
+                    next.awaiting_finalization = false;
+                    next.final_phase_started = true;
+                    pending_membership_changes_.erase(membership_it);
+                    pending_membership_changes_.emplace(final_log_index, std::move(next));
+                    (void)DrainCoreOutput();
+                }
+                else
+                {
+                    MembershipChangeResult result;
+                    result.request_id = membership_it->second.request_id;
+                    result.log_index = event.applied_index;
+                    result.term = core_->current_term();
+                    result.status = finalize_status;
+                    ResolveLeaderHint(&result.leader_id, &result.leader_address);
+                    result.final_result = true;
+                    EmitMembershipChangeResult(std::move(result));
+                    pending_membership_changes_.erase(membership_it);
+                }
+            }
+            else
+            {
+                MembershipChangeResult result;
+                result.request_id = membership_it->second.request_id;
+                result.log_index = event.applied_index;
+                result.term = core_->current_term();
+                result.status = common::Status::OK();
+                ResolveLeaderHint(&result.leader_id, &result.leader_address);
+                result.final_result = true;
+                EmitMembershipChangeResult(std::move(result));
+                pending_membership_changes_.erase(membership_it);
+            }
+        }
 
         if (event.proposal_id != 0)
         {
@@ -773,6 +951,55 @@ namespace cpr::raft
         {
             proposal_results_.overflow = true;
         }
+    }
+
+    void RaftRuntime::EmitMembershipChangeResult(MembershipChangeResult result)
+    {
+        std::lock_guard<std::mutex> lock(results_mutex_);
+        membership_results_.push_back(std::move(result));
+    }
+
+    common::Status RaftRuntime::ResolveLeaderHint(common::NodeId *leader_id,
+                                                  NodeAddress *leader_address) const
+    {
+        if (leader_id == nullptr || leader_address == nullptr)
+        {
+            return common::Status::InvalidArgument("leader hint output is null");
+        }
+        *leader_id = core_->leader_id();
+        *leader_address = NodeAddress{};
+        if (*leader_id == common::kInvalidNodeId)
+        {
+            return common::Status::NotFound("leader unknown");
+        }
+
+        MembershipView membership;
+        common::Status status = core_->GetMembershipView(&membership);
+        if (!status.ok())
+        {
+            return status;
+        }
+        const auto find_member =
+            [leader_id](const std::vector<RaftMember> &members, NodeAddress *address)
+            {
+                for (const RaftMember &member : members)
+                {
+                    if (member.node_id == *leader_id)
+                    {
+                        *address = member.address;
+                        return true;
+                    }
+                }
+                return false;
+            };
+        if (!find_member(membership.voters, leader_address) &&
+            !find_member(membership.learners, leader_address) &&
+            !find_member(membership.next_voters, leader_address) &&
+            !find_member(membership.next_learners, leader_address))
+        {
+            return common::Status::NotFound("leader address unknown");
+        }
+        return common::Status::OK();
     }
 
     // ===================================================================

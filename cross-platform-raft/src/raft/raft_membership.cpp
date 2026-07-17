@@ -12,7 +12,7 @@ namespace cpr::raft
     namespace
     {
 
-        constexpr std::uint8_t kMembershipLogFormatVersion = 1;
+        constexpr std::uint8_t kMembershipLogFormatVersion = 2;
         constexpr std::uint8_t kActiveTransitionFlag = 0x01;
 
         bool MemberLess(const RaftMember &lhs, const RaftMember &rhs)
@@ -139,6 +139,8 @@ namespace cpr::raft
                    lhs.has_active_transition == rhs.has_active_transition &&
                    lhs.voters.size() == rhs.voters.size() &&
                    lhs.learners.size() == rhs.learners.size() &&
+                   lhs.next_voters.size() == rhs.next_voters.size() &&
+                   lhs.next_learners.size() == rhs.next_learners.size() &&
                    std::equal(lhs.voters.begin(),
                               lhs.voters.end(),
                               rhs.voters.begin(),
@@ -146,6 +148,14 @@ namespace cpr::raft
                    std::equal(lhs.learners.begin(),
                               lhs.learners.end(),
                               rhs.learners.begin(),
+                              MemberEqual) &&
+                   std::equal(lhs.next_voters.begin(),
+                              lhs.next_voters.end(),
+                              rhs.next_voters.begin(),
+                              MemberEqual) &&
+                   std::equal(lhs.next_learners.begin(),
+                              lhs.next_learners.end(),
+                              rhs.next_learners.begin(),
                               MemberEqual);
         }
 
@@ -423,11 +433,25 @@ namespace cpr::raft
         {
             return status;
         }
+        status = ValidateMembers(view.next_voters, "next_voters");
+        if (!status.ok())
+        {
+            return status;
+        }
+        status = ValidateMembers(view.next_learners, "next_learners");
+        if (!status.ok())
+        {
+            return status;
+        }
 
         std::vector<RaftMember> voters = view.voters;
         std::vector<RaftMember> learners = view.learners;
+        std::vector<RaftMember> next_voters = view.next_voters;
+        std::vector<RaftMember> next_learners = view.next_learners;
         NormalizeMembers(&voters);
         NormalizeMembers(&learners);
+        NormalizeMembers(&next_voters);
+        NormalizeMembers(&next_learners);
 
         std::size_t voter_index = 0;
         std::size_t learner_index = 0;
@@ -448,6 +472,44 @@ namespace cpr::raft
             }
         }
 
+        if (!view.has_active_transition)
+        {
+            if (!view.next_voters.empty() || !view.next_learners.empty())
+            {
+                return common::Status::InvalidArgument(
+                    "stable membership must not contain transition target sets");
+            }
+            return common::Status::OK();
+        }
+
+        if (next_voters.empty())
+        {
+            return common::Status::InvalidArgument(
+                "active transition must contain next voters");
+        }
+
+        std::size_t next_voter_index = 0;
+        std::size_t next_learner_index = 0;
+        while (next_voter_index < next_voters.size() &&
+               next_learner_index < next_learners.size())
+        {
+            if (next_voters[next_voter_index].node_id ==
+                next_learners[next_learner_index].node_id)
+            {
+                return common::Status::InvalidArgument(
+                    "transition target node cannot be both voter and learner");
+            }
+            if (next_voters[next_voter_index].node_id <
+                next_learners[next_learner_index].node_id)
+            {
+                ++next_voter_index;
+            }
+            else
+            {
+                ++next_learner_index;
+            }
+        }
+
         return common::Status::OK();
     }
 
@@ -458,6 +520,8 @@ namespace cpr::raft
         view.learners = entry.learners;
         view.has_active_transition = entry.has_active_transition;
         view.configuration_id = entry.configuration_id;
+        view.next_voters = entry.next_voters;
+        view.next_learners = entry.next_learners;
         return ValidateMembershipView(view);
     }
 
@@ -523,6 +587,8 @@ namespace cpr::raft
         candidate.configuration_id += 1;
         candidate.has_active_transition = false;
         candidate.learners.push_back(learner);
+        candidate.next_voters.clear();
+        candidate.next_learners.clear();
 
         MembershipLogEntry normalized;
         status = NormalizeLogEntry(candidate, &normalized);
@@ -576,10 +642,17 @@ namespace cpr::raft
                 "node is not a committed learner");
         }
 
+        const RaftMember promoted = *learner_it;
         candidate.configuration_id += 1;
-        candidate.has_active_transition = false;
-        candidate.voters.push_back(*learner_it);
-        candidate.learners.erase(learner_it);
+        candidate.has_active_transition = true;
+        candidate.next_voters = candidate.voters;
+        candidate.next_voters.push_back(promoted);
+        candidate.next_learners = candidate.learners;
+        candidate.next_learners.erase(
+            std::find_if(candidate.next_learners.begin(),
+                         candidate.next_learners.end(),
+                         [learner_node_id](const RaftMember &member)
+                         { return member.node_id == learner_node_id; }));
 
         MembershipLogEntry normalized;
         common::Status status = NormalizeLogEntry(candidate, &normalized);
@@ -629,7 +702,14 @@ namespace cpr::raft
                 return common::Status::InvalidArgument(
                     "cannot remove the last voter");
             }
-            candidate.voters.erase(voter_it);
+            candidate.next_voters = candidate.voters;
+            candidate.next_voters.erase(
+                std::find_if(candidate.next_voters.begin(),
+                             candidate.next_voters.end(),
+                             [member_node_id](const RaftMember &member)
+                             { return member.node_id == member_node_id; }));
+            candidate.next_learners = candidate.learners;
+            candidate.has_active_transition = true;
         }
         else
         {
@@ -643,10 +723,12 @@ namespace cpr::raft
                     "member does not exist");
             }
             candidate.learners.erase(learner_it);
+            candidate.next_voters.clear();
+            candidate.next_learners.clear();
+            candidate.has_active_transition = false;
         }
 
         candidate.configuration_id += 1;
-        candidate.has_active_transition = false;
 
         MembershipLogEntry normalized;
         common::Status status = NormalizeLogEntry(candidate, &normalized);
@@ -655,6 +737,36 @@ namespace cpr::raft
             return status;
         }
 
+        *entry = std::move(normalized);
+        return common::Status::OK();
+    }
+
+    common::Status BuildFinalizeMembershipLogEntry(const MembershipState &state,
+                                                   MembershipLogEntry *entry)
+    {
+        if (entry == nullptr)
+        {
+            return common::Status::InvalidArgument(
+                "membership finalize entry output is null");
+        }
+        if (state.empty() || !state.has_active_transition())
+        {
+            return common::Status::InvalidArgument(
+                "membership transition is not active");
+        }
+
+        MembershipLogEntry candidate;
+        candidate.configuration_id = state.configuration_id() + 1;
+        candidate.voters = state.next_voters();
+        candidate.learners = state.next_learners();
+        candidate.has_active_transition = false;
+
+        MembershipLogEntry normalized;
+        common::Status status = NormalizeLogEntry(candidate, &normalized);
+        if (!status.ok())
+        {
+            return status;
+        }
         *entry = std::move(normalized);
         return common::Status::OK();
     }
@@ -678,6 +790,8 @@ namespace cpr::raft
         MembershipState candidate;
         candidate.voters_ = std::move(normalized.voters);
         candidate.learners_ = std::move(normalized.learners);
+        candidate.next_voters_ = std::move(normalized.next_voters);
+        candidate.next_learners_ = std::move(normalized.next_learners);
         candidate.has_active_transition_ = normalized.has_active_transition;
         candidate.configuration_id_ = normalized.configuration_id;
         *state = std::move(candidate);
@@ -739,6 +853,8 @@ namespace cpr::raft
         incoming.learners = normalized.learners;
         incoming.has_active_transition = normalized.has_active_transition;
         incoming.configuration_id = normalized.configuration_id;
+        incoming.next_voters = normalized.next_voters;
+        incoming.next_learners = normalized.next_learners;
 
         if (empty())
         {
@@ -779,23 +895,32 @@ namespace cpr::raft
     bool MembershipState::empty() const noexcept
     {
         return configuration_id_ == 0 && voters_.empty() && learners_.empty() &&
+               next_voters_.empty() && next_learners_.empty() &&
                !has_active_transition_;
     }
 
     bool MembershipState::IsVoter(common::NodeId node_id) const noexcept
     {
-        return std::any_of(voters_.begin(),
-                           voters_.end(),
-                           [node_id](const RaftMember &member)
-                           { return member.node_id == node_id; });
+        const auto has_node = [node_id](const RaftMember &member)
+        { return member.node_id == node_id; };
+        return std::any_of(voters_.begin(), voters_.end(), has_node) ||
+               (has_active_transition_ &&
+                std::any_of(next_voters_.begin(), next_voters_.end(), has_node));
     }
 
     bool MembershipState::IsLearner(common::NodeId node_id) const noexcept
     {
         return std::any_of(learners_.begin(),
                            learners_.end(),
-                           [node_id](const RaftMember &member)
-                           { return member.node_id == node_id; });
+                           [this, node_id](const RaftMember &member)
+                           {
+                               return member.node_id == node_id &&
+                                      (!has_active_transition_ ||
+                                       !std::any_of(next_voters_.begin(),
+                                                    next_voters_.end(),
+                                                    [node_id](const RaftMember &next)
+                                                    { return next.node_id == node_id; }));
+                           });
     }
 
     bool MembershipState::Contains(common::NodeId node_id) const noexcept
@@ -828,6 +953,16 @@ namespace cpr::raft
         return learners_;
     }
 
+    const std::vector<RaftMember> &MembershipState::next_voters() const noexcept
+    {
+        return next_voters_;
+    }
+
+    const std::vector<RaftMember> &MembershipState::next_learners() const noexcept
+    {
+        return next_learners_;
+    }
+
     bool MembershipState::has_active_transition() const noexcept
     {
         return has_active_transition_;
@@ -845,6 +980,8 @@ namespace cpr::raft
         view.learners = learners_;
         view.has_active_transition = has_active_transition_;
         view.configuration_id = configuration_id_;
+        view.next_voters = next_voters_;
+        view.next_learners = next_learners_;
         return view;
     }
 
@@ -855,6 +992,8 @@ namespace cpr::raft
         entry.voters = voters_;
         entry.learners = learners_;
         entry.has_active_transition = has_active_transition_;
+        entry.next_voters = next_voters_;
+        entry.next_learners = next_learners_;
         return entry;
     }
 
@@ -890,6 +1029,16 @@ namespace cpr::raft
         {
             return status;
         }
+        status = EncodeMembers(normalized.next_voters, &encoded);
+        if (!status.ok())
+        {
+            return status;
+        }
+        status = EncodeMembers(normalized.next_learners, &encoded);
+        if (!status.ok())
+        {
+            return status;
+        }
 
         *payload = std::move(encoded);
         return common::Status::OK();
@@ -911,7 +1060,7 @@ namespace cpr::raft
         {
             return status;
         }
-        if (version != kMembershipLogFormatVersion)
+        if (version != 1 && version != kMembershipLogFormatVersion)
         {
             return common::Status::Corruption(
                 "membership payload has unknown format version");
@@ -946,6 +1095,19 @@ namespace cpr::raft
         if (!status.ok())
         {
             return status;
+        }
+        if (version >= 2)
+        {
+            status = DecodeMembers(payload, &offset, &decoded.next_voters);
+            if (!status.ok())
+            {
+                return status;
+            }
+            status = DecodeMembers(payload, &offset, &decoded.next_learners);
+            if (!status.ok())
+            {
+                return status;
+            }
         }
         if (offset != payload.size())
         {

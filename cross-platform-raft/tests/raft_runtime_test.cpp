@@ -346,12 +346,27 @@ namespace cpr::raft
             Shutdown();
         }
 
-        TEST_F(RuntimeTest, MembershipChangeReturnsNotSupported)
+        TEST_F(RuntimeTest, MembershipChangeEventProducesResult)
         {
             CreateLeaderRuntime();
             MembershipChangeEvent mc;
-            EXPECT_EQ(rt_->EnqueueMembershipChange(mc).code(),
-                      StatusCode::kRetryLater);
+            mc.kind = MembershipChangeEvent::Kind::ADD_LEARNER;
+            mc.request_id = "membership-1";
+            mc.member.node_id = 2;
+            mc.member.address.host = "10.0.0.2";
+            mc.member.address.port = 9002;
+            ASSERT_TRUE(rt_->EnqueueMembershipChange(mc).ok());
+
+            MembershipChangeResult result;
+            for (int i = 0; i < 1000; ++i)
+            {
+                if (rt_->TryTakeMembershipChangeResult(mc.request_id, &result))
+                {
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            EXPECT_EQ(result.request_id, mc.request_id);
             Shutdown();
         }
 

@@ -146,6 +146,7 @@ namespace cpr::raft
                                       common::LogIndex *log_index = nullptr);
         common::Status RemoveMember(common::NodeId member_node_id,
                                     common::LogIndex *log_index = nullptr);
+        common::Status FinalizeMembershipChange(common::LogIndex *log_index = nullptr);
         common::Status ApplyCommittedMembershipEntry(const LogEntry &entry);
         common::Status ConfirmApplied(common::LogIndex index);
         common::Status BuildInstallSnapshotForPeer(common::NodeId target_node_id,
@@ -229,6 +230,9 @@ namespace cpr::raft
         common::LogIndex ClampPeerNextIndex(common::LogIndex index) const noexcept;
         bool HasPendingMembershipChange() const;
         bool HasCommittedVoterQuorum() const;
+        bool HasJointQuorumAt(common::LogIndex index) const;
+        std::vector<common::NodeId> TransitionVoterIds() const;
+        std::vector<common::NodeId> TransitionLearnerIds() const;
         void ResetElectionTicks() noexcept;
 
         common::NodeId node_id_ = common::kInvalidNodeId;

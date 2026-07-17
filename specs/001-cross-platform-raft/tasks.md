@@ -191,7 +191,7 @@
   - Done: Generated files are build artifacts; manually maintained `.h`/`.cpp` files remain paired in the same source directories.
   - Parallel: No.
 
-- [ ] T028 [US1] P6-T03 Implement IRaftTransport and GrpcRaftTransport in `cross-platform-raft/src/raft/raft_transport.h`, `raft_transport.cpp`, `grpc_raft_transport.h`, and `grpc_raft_transport.cpp`
+- [X] T028 [US1] P6-T03 Implement IRaftTransport and GrpcRaftTransport in `cross-platform-raft/src/raft/raft_transport.h`, `raft_transport.cpp`, `grpc_raft_transport.h`, and `grpc_raft_transport.cpp`
   - Scope: Define transport send contracts, peer connection management, timeouts, errors, and per-peer outbound queue integration.
   - Dependencies: T024, T027.
   - Done: Transport has real gRPC and later simulated implementations behind the same stable interface.

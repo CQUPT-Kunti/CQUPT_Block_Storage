@@ -179,7 +179,7 @@
 
 **Goal**: Connect nodes and clients through thin RPC adapters for US1.
 
-- [ ] T026 [P] [US1] P6-T01 Define Raft, Metadata, and Store protobuf contracts in `cross-platform-raft/proto/raft.proto`, `metadata.proto`, and `store.proto`
+- [X] T026 [P] [US1] P6-T01 Define Raft, Metadata, and Store protobuf contracts in `cross-platform-raft/proto/raft.proto`, `metadata.proto`, and `store.proto`
   - Scope: Define RequestVote, AppendEntries, InstallSnapshot, Metadata Propose/Query/GetLeader/GetStatus, and Store service message shells needed by current phases.
   - Dependencies: T008, T021.
   - Done: Contracts match `contracts/interfaces-and-services.md` and avoid embedding consensus algorithms or business-only behavior in protobuf design.

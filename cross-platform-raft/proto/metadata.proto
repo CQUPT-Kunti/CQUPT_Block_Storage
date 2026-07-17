@@ -1,0 +1,98 @@
+syntax = "proto3";
+
+package cpr.metadata.v1;
+
+option cc_enable_arenas = true;
+
+import "common.proto";
+
+service MetadataService {
+  rpc Propose(ProposeRequest) returns (ProposeResponse);
+  rpc Query(QueryRequest) returns (QueryResponse);
+  rpc GetLeader(GetLeaderRequest) returns (GetLeaderResponse);
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+  rpc AddLearner(AddLearnerRequest) returns (MembershipChangeResponse);
+  rpc PromoteLearner(PromoteLearnerRequest) returns (MembershipChangeResponse);
+  rpc RemoveMember(RemoveMemberRequest) returns (MembershipChangeResponse);
+}
+
+message ProposeRequest {
+  string request_id = 1;
+  bytes command_payload = 2;
+  uint64 timeout_ms = 3;
+}
+
+message ProposeResponse {
+  cpr.common.v1.RpcStatus status = 1;
+  uint64 log_index = 2;
+  uint64 term = 3;
+  cpr.common.v1.LeaderHint leader = 4;
+}
+
+message QueryRequest {
+  string request_id = 1;
+  bytes query_payload = 2;
+  bool allow_follower_read = 3;
+}
+
+message QueryResponse {
+  cpr.common.v1.RpcStatus status = 1;
+  bytes result_payload = 2;
+  uint64 term = 3;
+  cpr.common.v1.LeaderHint leader = 4;
+}
+
+message GetLeaderRequest {}
+
+message GetLeaderResponse {
+  cpr.common.v1.RpcStatus status = 1;
+  cpr.common.v1.LeaderHint leader = 2;
+}
+
+message GetStatusRequest {
+  bool include_peer_progress = 1;
+  bool include_membership = 2;
+}
+
+message RaftNodeStatus {
+  uint64 node_id = 1;
+  cpr.common.v1.ClusterRole role = 2;
+  cpr.common.v1.NodeLifecycleState state = 3;
+  uint64 current_term = 4;
+  uint64 voted_for = 5;
+  uint64 commit_index = 6;
+  uint64 leader_id = 7;
+  cpr.common.v1.LeaderHint leader = 8;
+  cpr.common.v1.MembershipView membership = 9;
+  repeated cpr.common.v1.PeerProgress peers = 10;
+}
+
+message GetStatusResponse {
+  cpr.common.v1.RpcStatus status = 1;
+  RaftNodeStatus node = 2;
+}
+
+message AddLearnerRequest {
+  string request_id = 1;
+  cpr.common.v1.ClusterMember learner = 2;
+  uint64 timeout_ms = 3;
+}
+
+message PromoteLearnerRequest {
+  string request_id = 1;
+  uint64 node_id = 2;
+  uint64 timeout_ms = 3;
+}
+
+message RemoveMemberRequest {
+  string request_id = 1;
+  uint64 node_id = 2;
+  uint64 timeout_ms = 3;
+}
+
+message MembershipChangeResponse {
+  cpr.common.v1.RpcStatus status = 1;
+  uint64 log_index = 2;
+  uint64 term = 3;
+  cpr.common.v1.LeaderHint leader = 4;
+}

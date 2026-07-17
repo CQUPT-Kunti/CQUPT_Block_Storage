@@ -1,0 +1,122 @@
+syntax = "proto3";
+
+package cpr.store.v1;
+
+option cc_enable_arenas = true;
+
+import "common.proto";
+
+service StoreControlService {
+  rpc Register(RegisterStoreRequest) returns (StoreCommandResponse);
+  rpc Heartbeat(StoreHeartbeatRequest) returns (StoreHeartbeatResponse);
+  rpc Stop(StoreStopRequest) returns (StoreCommandResponse);
+  rpc Remove(StoreRemoveRequest) returns (StoreCommandResponse);
+  rpc PollTasks(PollTasksRequest) returns (PollTasksResponse);
+  rpc ReportTaskResult(ReportTaskResultRequest) returns (ReportTaskResultResponse);
+}
+
+enum StoreState {
+  STORE_STATE_UNSPECIFIED = 0;
+  STORE_STATE_RUNNING = 1;
+  STORE_STATE_STOPPED = 2;
+  STORE_STATE_FAILED = 3;
+}
+
+enum TaskType {
+  TASK_TYPE_UNSPECIFIED = 0;
+  TASK_TYPE_CREATE = 1;
+  TASK_TYPE_DELETE = 2;
+  TASK_TYPE_COPY = 3;
+  TASK_TYPE_CUSTOM = 4;
+}
+
+enum TaskState {
+  TASK_STATE_UNSPECIFIED = 0;
+  TASK_STATE_WAITING = 1;
+  TASK_STATE_RUNNING = 2;
+  TASK_STATE_SUCCESS = 3;
+  TASK_STATE_FAILED = 4;
+}
+
+message StoreDescriptor {
+  uint64 store_id = 1;
+  cpr.common.v1.NodeAddress address = 2;
+  uint64 total_capacity_bytes = 3;
+  uint64 used_capacity_bytes = 4;
+  StoreState state = 5;
+  uint64 generation = 6;
+}
+
+message StoreCommandResponse {
+  cpr.common.v1.RpcStatus status = 1;
+  uint64 log_index = 2;
+  uint64 term = 3;
+  cpr.common.v1.LeaderHint leader = 4;
+  StoreDescriptor store = 5;
+}
+
+message RegisterStoreRequest {
+  string request_id = 1;
+  StoreDescriptor store = 2;
+  uint64 timeout_ms = 3;
+}
+
+message StoreHeartbeatRequest {
+  uint64 store_id = 1;
+  uint64 generation = 2;
+  uint64 used_capacity_bytes = 3;
+  uint64 available_capacity_bytes = 4;
+}
+
+message StoreHeartbeatResponse {
+  cpr.common.v1.RpcStatus status = 1;
+  uint64 term = 2;
+  cpr.common.v1.LeaderHint leader = 3;
+}
+
+message StoreStopRequest {
+  string request_id = 1;
+  uint64 store_id = 2;
+  uint64 generation = 3;
+  uint64 timeout_ms = 4;
+}
+
+message StoreRemoveRequest {
+  string request_id = 1;
+  uint64 store_id = 2;
+  uint64 generation = 3;
+  uint64 timeout_ms = 4;
+}
+
+message PollTasksRequest {
+  uint64 store_id = 1;
+  uint64 generation = 2;
+  uint32 max_tasks = 3;
+}
+
+message TaskAssignment {
+  string task_id = 1;
+  TaskType type = 2;
+  TaskState state = 3;
+  bytes target_payload = 4;
+  uint64 sequence = 5;
+}
+
+message PollTasksResponse {
+  cpr.common.v1.RpcStatus status = 1;
+  repeated TaskAssignment tasks = 2;
+}
+
+message ReportTaskResultRequest {
+  uint64 store_id = 1;
+  uint64 generation = 2;
+  string task_id = 3;
+  TaskState final_state = 4;
+  bytes result_payload = 5;
+}
+
+message ReportTaskResultResponse {
+  cpr.common.v1.RpcStatus status = 1;
+  bool duplicate_result = 2;
+  TaskAssignment task = 3;
+}

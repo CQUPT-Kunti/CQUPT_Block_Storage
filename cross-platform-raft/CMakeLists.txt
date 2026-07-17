@@ -43,6 +43,7 @@ cpr_configure_compiler_options(cpr_project_options cpr_project_warnings)
 cpr_configure_platform_options(cpr_platform_options)
 cpr_detect_dependencies(cpr_dependency_options)
 
+add_subdirectory(proto)
 add_subdirectory(src/common)
 add_subdirectory(src/config)
 add_subdirectory(src/platform)

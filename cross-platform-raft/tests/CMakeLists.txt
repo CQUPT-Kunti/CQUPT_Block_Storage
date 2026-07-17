@@ -170,3 +170,29 @@ if(TARGET cpr_rpc)
         TEST_PREFIX raft_rpc.
     )
 endif()
+
+if(TARGET cpr_rpc AND TARGET cpr_transport)
+    add_executable(cpr_raft_rpc_integration_tests
+        raft_rpc_integration_test.cpp
+    )
+
+    target_link_libraries(cpr_raft_rpc_integration_tests
+        PRIVATE
+            ${CPR_GTEST_LINK_TARGET}
+            cpr_transport
+            cpr_rpc
+            cpr_raft
+            cpr_project_options
+            cpr_project_warnings
+            cpr_platform_options
+    )
+
+    target_include_directories(cpr_raft_rpc_integration_tests
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/src
+    )
+
+    gtest_discover_tests(cpr_raft_rpc_integration_tests
+        TEST_PREFIX raft_rpc_integration.
+    )
+endif()

@@ -203,7 +203,7 @@
   - Done: RPC code does not contain election, quorum, conflict, or direct RaftCore mutation logic.
   - Parallel: No.
 
-- [ ] T030 [US1] P6-T05 Run consolidated three-node gRPC integration tests in `cross-platform-raft/tests/grpc_cluster_test.cpp`
+- [X] T030 [US1] P6-T05 Run consolidated three-node gRPC integration tests in `cross-platform-raft/tests/grpc_cluster_test.cpp`
   - Scope: Start three real gRPC nodes, verify leader election, Proposal, log replication, leader shutdown, and re-election.
   - Dependencies: T026-T029.
   - Done: Integration uses bounded timeouts and logs full output under `tmp/test-logs/` when needed.

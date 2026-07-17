@@ -152,6 +152,7 @@ add_executable(cpr_raft_membership_tests
     raft_membership_add_learner_test.cpp
     raft_membership_change_test.cpp
     raft_membership_transition_test.cpp
+    raft_membership_test.cpp
 )
 
 target_link_libraries(cpr_raft_membership_tests

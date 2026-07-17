@@ -237,7 +237,7 @@
   - Done: Runtime exposes membership results through RPC without moving consensus rules into RPC.
   - Parallel: No.
 
-- [ ] T035 [US4] P7-T05 Run consolidated membership tests in `cross-platform-raft/tests/raft_membership_test.cpp`
+- [X] T035 [US4] P7-T05 Run consolidated membership tests in `cross-platform-raft/tests/raft_membership_test.cpp`
   - Scope: Verify learners do not vote/count/lead, learner catch-up, promotion, removal, one-change rejection, quorum-loss safety, and permanently failed voter replacement while quorum remains.
   - Dependencies: T031-T034.
   - Done: Membership tests include both simulation and phase-level integration paths.

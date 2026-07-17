@@ -142,6 +142,10 @@ namespace cpr::raft
         common::Status Propose(const OpaquePayload &payload);
         common::Status AddLearner(const RaftMember &learner,
                                   common::LogIndex *log_index = nullptr);
+        common::Status PromoteLearner(common::NodeId learner_node_id,
+                                      common::LogIndex *log_index = nullptr);
+        common::Status RemoveMember(common::NodeId member_node_id,
+                                    common::LogIndex *log_index = nullptr);
         common::Status ApplyCommittedMembershipEntry(const LogEntry &entry);
         common::Status ConfirmApplied(common::LogIndex index);
         common::Status BuildInstallSnapshotForPeer(common::NodeId target_node_id,
@@ -199,6 +203,8 @@ namespace cpr::raft
         common::Status InitializeMembershipState(const Options &options);
         common::Status SyncMembershipVectorsFromState();
         common::Status UpdatePeerProgressForMembership();
+        common::Status AppendMembershipChangeProposal(const MembershipLogEntry &entry,
+                                                     common::LogIndex *log_index);
         common::Status BecomeFollowerForRemote(common::Term term, common::NodeId leader_id);
         common::Status UpdateCurrentTerm(common::Term term);
         common::Status GetLastLogTerm(common::Term *term) const;
@@ -221,6 +227,8 @@ namespace cpr::raft
                                               common::LogIndex hint_index) const;
         common::LogIndex FindLastIndexOfTerm(common::Term term) const;
         common::LogIndex ClampPeerNextIndex(common::LogIndex index) const noexcept;
+        bool HasPendingMembershipChange() const;
+        bool HasCommittedVoterQuorum() const;
         void ResetElectionTicks() noexcept;
 
         common::NodeId node_id_ = common::kInvalidNodeId;

@@ -133,8 +133,11 @@ namespace cpr::raft
                       StatusCode::kInvalidArgument);
 
             ASSERT_TRUE(leader.AddLearner(MakeMember(2, "10.0.0.2")).ok());
+            EXPECT_EQ(leader.AddLearner(MakeMember(3, "10.0.0.3")).code(),
+                      StatusCode::kBusy);
             const LogEntry membership_entry = GetEntry(leader, 1);
             ASSERT_TRUE(leader.ApplyCommittedMembershipEntry(membership_entry).ok());
+            ASSERT_TRUE(leader.ConfirmApplied(1).ok());
 
             EXPECT_EQ(leader.AddLearner(MakeMember(2, "10.0.0.2")).code(),
                       StatusCode::kInvalidArgument);

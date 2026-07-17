@@ -225,7 +225,7 @@
   - Done: New nodes join as learners and receive logs or snapshots without voting.
   - Parallel: No.
 
-- [ ] T033 [US4] P7-T03 Implement PromoteLearner, RemoveMember, and one-change-at-a-time enforcement in `cross-platform-raft/src/raft/raft_membership.cpp` and `raft_core.cpp`
+- [X] T033 [US4] P7-T03 Implement PromoteLearner, RemoveMember, and one-change-at-a-time enforcement in `cross-platform-raft/src/raft/raft_membership.cpp` and `raft_core.cpp`
   - Scope: Enforce promotion preconditions, removal rules, single active change, and rejection when old configuration lost quorum.
   - Dependencies: T032.
   - Done: Membership changes are committed through the Raft log and unsafe automatic membership modification is impossible.

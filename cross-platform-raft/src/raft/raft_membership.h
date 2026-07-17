@@ -62,6 +62,12 @@ namespace cpr::raft
     common::Status BuildAddLearnerLogEntry(const MembershipState &state,
                                            const RaftMember &learner,
                                            MembershipLogEntry *entry);
+    common::Status BuildPromoteLearnerLogEntry(const MembershipState &state,
+                                               common::NodeId learner_node_id,
+                                               MembershipLogEntry *entry);
+    common::Status BuildRemoveMemberLogEntry(const MembershipState &state,
+                                             common::NodeId member_node_id,
+                                             MembershipLogEntry *entry);
     common::Status EncodeMembershipLogEntry(const MembershipLogEntry &entry,
                                             OpaquePayload *payload);
     common::Status DecodeMembershipLogEntry(const OpaquePayload &payload,

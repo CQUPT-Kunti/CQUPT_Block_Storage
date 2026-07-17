@@ -535,6 +535,130 @@ namespace cpr::raft
         return common::Status::OK();
     }
 
+    common::Status BuildPromoteLearnerLogEntry(const MembershipState &state,
+                                               common::NodeId learner_node_id,
+                                               MembershipLogEntry *entry)
+    {
+        if (entry == nullptr)
+        {
+            return common::Status::InvalidArgument(
+                "membership promote learner entry output is null");
+        }
+        if (state.empty())
+        {
+            return common::Status::InvalidArgument(
+                "membership state is empty");
+        }
+        if (state.has_active_transition())
+        {
+            return common::Status::Busy(
+                "membership change already in progress");
+        }
+        if (learner_node_id == common::kInvalidNodeId)
+        {
+            return common::Status::InvalidArgument(
+                "learner node id must be valid");
+        }
+        if (state.IsVoter(learner_node_id))
+        {
+            return common::Status::InvalidArgument(
+                "node is already a voter");
+        }
+
+        MembershipLogEntry candidate = state.ToLogEntry();
+        auto learner_it = std::find_if(candidate.learners.begin(),
+                                       candidate.learners.end(),
+                                       [learner_node_id](const RaftMember &member)
+                                       { return member.node_id == learner_node_id; });
+        if (learner_it == candidate.learners.end())
+        {
+            return common::Status::InvalidArgument(
+                "node is not a committed learner");
+        }
+
+        candidate.configuration_id += 1;
+        candidate.has_active_transition = false;
+        candidate.voters.push_back(*learner_it);
+        candidate.learners.erase(learner_it);
+
+        MembershipLogEntry normalized;
+        common::Status status = NormalizeLogEntry(candidate, &normalized);
+        if (!status.ok())
+        {
+            return status;
+        }
+
+        *entry = std::move(normalized);
+        return common::Status::OK();
+    }
+
+    common::Status BuildRemoveMemberLogEntry(const MembershipState &state,
+                                             common::NodeId member_node_id,
+                                             MembershipLogEntry *entry)
+    {
+        if (entry == nullptr)
+        {
+            return common::Status::InvalidArgument(
+                "membership remove member entry output is null");
+        }
+        if (state.empty())
+        {
+            return common::Status::InvalidArgument(
+                "membership state is empty");
+        }
+        if (state.has_active_transition())
+        {
+            return common::Status::Busy(
+                "membership change already in progress");
+        }
+        if (member_node_id == common::kInvalidNodeId)
+        {
+            return common::Status::InvalidArgument(
+                "member node id must be valid");
+        }
+
+        MembershipLogEntry candidate = state.ToLogEntry();
+        const auto voter_it = std::find_if(candidate.voters.begin(),
+                                           candidate.voters.end(),
+                                           [member_node_id](const RaftMember &member)
+                                           { return member.node_id == member_node_id; });
+        if (voter_it != candidate.voters.end())
+        {
+            if (candidate.voters.size() == 1)
+            {
+                return common::Status::InvalidArgument(
+                    "cannot remove the last voter");
+            }
+            candidate.voters.erase(voter_it);
+        }
+        else
+        {
+            const auto learner_it = std::find_if(candidate.learners.begin(),
+                                                 candidate.learners.end(),
+                                                 [member_node_id](const RaftMember &member)
+                                                 { return member.node_id == member_node_id; });
+            if (learner_it == candidate.learners.end())
+            {
+                return common::Status::InvalidArgument(
+                    "member does not exist");
+            }
+            candidate.learners.erase(learner_it);
+        }
+
+        candidate.configuration_id += 1;
+        candidate.has_active_transition = false;
+
+        MembershipLogEntry normalized;
+        common::Status status = NormalizeLogEntry(candidate, &normalized);
+        if (!status.ok())
+        {
+            return status;
+        }
+
+        *entry = std::move(normalized);
+        return common::Status::OK();
+    }
+
     common::Status MembershipState::FromView(const MembershipView &view,
                                              MembershipState *state)
     {

@@ -259,6 +259,10 @@ namespace cpr::raft
         {
             return MakeInvalid("only the leader can add a learner");
         }
+        if (HasPendingMembershipChange())
+        {
+            return Status::Busy("another membership change is still pending");
+        }
 
         MembershipLogEntry membership_entry;
         Status status = BuildAddLearnerLogEntry(membership_state_,
@@ -269,8 +273,111 @@ namespace cpr::raft
             return status;
         }
 
+        return AppendMembershipChangeProposal(membership_entry, log_index);
+    }
+
+    common::Status RaftCore::PromoteLearner(NodeId learner_node_id,
+                                            LogIndex *log_index)
+    {
+        if (!initialized_)
+        {
+            return MakeInvalid("raft core is not initialized");
+        }
+        if (role_ != RaftRole::LEADER)
+        {
+            return MakeInvalid("only the leader can promote a learner");
+        }
+        if (learner_node_id == common::kInvalidNodeId)
+        {
+            return MakeInvalid("learner node id must be valid");
+        }
+        if (HasPendingMembershipChange())
+        {
+            return Status::Busy("another membership change is still pending");
+        }
+        if (!HasCommittedVoterQuorum())
+        {
+            return Status::Busy("committed voter configuration has lost quorum");
+        }
+
+        LearnerState learner_state;
+        Status status = GetLearnerState(learner_node_id, &learner_state);
+        if (!status.ok())
+        {
+            return status;
+        }
+        if (learner_state.requires_snapshot)
+        {
+            return Status::Busy("learner still requires snapshot catch-up");
+        }
+        if (!learner_state.healthy)
+        {
+            return Status::Busy("learner is not healthy");
+        }
+        if (!learner_state.caught_up)
+        {
+            return Status::Busy("learner has not caught up to leader commit index");
+        }
+
+        MembershipLogEntry membership_entry;
+        status = BuildPromoteLearnerLogEntry(membership_state_,
+                                             learner_node_id,
+                                             &membership_entry);
+        if (!status.ok())
+        {
+            return status;
+        }
+
+        return AppendMembershipChangeProposal(membership_entry, log_index);
+    }
+
+    common::Status RaftCore::RemoveMember(NodeId member_node_id,
+                                          LogIndex *log_index)
+    {
+        if (!initialized_)
+        {
+            return MakeInvalid("raft core is not initialized");
+        }
+        if (role_ != RaftRole::LEADER)
+        {
+            return MakeInvalid("only the leader can remove a member");
+        }
+        if (member_node_id == common::kInvalidNodeId)
+        {
+            return MakeInvalid("member node id must be valid");
+        }
+        if (HasPendingMembershipChange())
+        {
+            return Status::Busy("another membership change is still pending");
+        }
+        if (!HasCommittedVoterQuorum())
+        {
+            return Status::Busy("committed voter configuration has lost quorum");
+        }
+
+        MembershipLogEntry membership_entry;
+        Status status = BuildRemoveMemberLogEntry(membership_state_,
+                                                  member_node_id,
+                                                  &membership_entry);
+        if (!status.ok())
+        {
+            return status;
+        }
+
+        return AppendMembershipChangeProposal(membership_entry, log_index);
+    }
+
+    common::Status RaftCore::AppendMembershipChangeProposal(
+        const MembershipLogEntry &membership_entry,
+        LogIndex *log_index)
+    {
+        if (!initialized_)
+        {
+            return MakeInvalid("raft core is not initialized");
+        }
+
         OpaquePayload payload;
-        status = EncodeMembershipLogEntry(membership_entry, &payload);
+        Status status = EncodeMembershipLogEntry(membership_entry, &payload);
         if (!status.ok())
         {
             return status;
@@ -394,7 +501,30 @@ namespace cpr::raft
         learner_ids_ = std::move(candidate_learners);
         peer_progress_ = std::move(candidate_progress);
         hard_state_.membership_configuration_id = membership_state_.configuration_id();
-        return SyncLocalPeerProgress();
+
+        status = SyncLocalPeerProgress();
+        if (!status.ok())
+        {
+            return status;
+        }
+
+        if (!ContainsNode(voter_ids_, node_id_) &&
+            !ContainsNode(learner_ids_, node_id_))
+        {
+            role_ = RaftRole::LEARNER;
+            leader_id_ = common::kInvalidNodeId;
+            hard_state_.voted_for = common::kInvalidNodeId;
+            ResetElectionTicks();
+            return Status::OK();
+        }
+        if (ContainsNode(learner_ids_, node_id_))
+        {
+            role_ = RaftRole::LEARNER;
+            leader_id_ = common::kInvalidNodeId;
+            hard_state_.voted_for = common::kInvalidNodeId;
+            ResetElectionTicks();
+        }
+        return Status::OK();
     }
 
     common::Status RaftCore::ConfirmApplied(common::LogIndex index)
@@ -1138,7 +1268,20 @@ namespace cpr::raft
             }
             hard_state_.membership_configuration_id = membership_state_.configuration_id();
         }
-        return UpdatePeerProgressForMembership();
+        status = UpdatePeerProgressForMembership();
+        if (!status.ok())
+        {
+            return status;
+        }
+        if (!ContainsNode(voter_ids_, node_id_) &&
+            !ContainsNode(learner_ids_, node_id_))
+        {
+            role_ = RaftRole::LEARNER;
+            leader_id_ = common::kInvalidNodeId;
+            hard_state_.voted_for = common::kInvalidNodeId;
+            ResetElectionTicks();
+        }
+        return Status::OK();
     }
 
     common::Status RaftCore::ConfirmPersistence(const PersistenceConfirmation &confirmation)
@@ -1889,6 +2032,10 @@ namespace cpr::raft
         Status status = FindPeerProgress(node_id_, &progress);
         if (!status.ok())
         {
+            if (status.code() == common::StatusCode::kNotFound)
+            {
+                return Status::OK();
+            }
             return status;
         }
         progress->is_active = true;
@@ -2014,6 +2161,44 @@ namespace cpr::raft
             return maximum;
         }
         return index;
+    }
+
+    bool RaftCore::HasPendingMembershipChange() const
+    {
+        for (LogIndex index = log_.applied_index() + 1; index <= log_.last_index(); ++index)
+        {
+            LogEntry entry;
+            if (!log_.GetEntry(index, &entry).ok())
+            {
+                continue;
+            }
+            if (entry.type == LogEntryType::MEMBERSHIP_CHANGE)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool RaftCore::HasCommittedVoterQuorum() const
+    {
+        std::size_t active_voters = 0;
+        for (NodeId node_id : voter_ids_)
+        {
+            if (node_id == node_id_)
+            {
+                ++active_voters;
+                continue;
+            }
+
+            const PeerProgress *progress = nullptr;
+            if (FindPeerProgress(node_id, &progress).ok() && progress->is_active)
+            {
+                ++active_voters;
+            }
+        }
+        const std::size_t quorum = (voter_ids_.size() / 2U) + 1U;
+        return active_voters >= quorum;
     }
 
     void RaftCore::ResetElectionTicks() noexcept

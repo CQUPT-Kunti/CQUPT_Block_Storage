@@ -247,7 +247,7 @@
 
 **Goal**: Provide the replaceable state-machine boundary and Metadata example for US2.
 
-- [ ] T036 [US2] P8-T01 Define IRaftStateMachine and MetadataCommand in `cross-platform-raft/src/metadata/state_machine.h` and `metadata_command.h/.cpp`
+- [X] T036 [US2] P8-T01 Define IRaftStateMachine and MetadataCommand in `cross-platform-raft/src/metadata/state_machine.h` and `metadata_command.h/.cpp`
   - Scope: Define Apply, CreateSnapshot, RestoreSnapshot, opaque command payload handling, and MetadataCommand serialization boundaries.
   - Dependencies: T024, T008.
   - Done: Raft module does not include Store, Placement, Task, or metadata business types.

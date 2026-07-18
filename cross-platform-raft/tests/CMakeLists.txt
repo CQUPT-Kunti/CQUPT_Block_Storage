@@ -173,6 +173,52 @@ gtest_discover_tests(cpr_raft_membership_tests
     TEST_PREFIX raft_membership.
 )
 
+if(TARGET cpr_metadata)
+    add_executable(cpr_metadata_command_tests
+        metadata_command_test.cpp
+    )
+
+    target_link_libraries(cpr_metadata_command_tests
+        PRIVATE
+            ${CPR_GTEST_LINK_TARGET}
+            cpr_metadata
+            cpr_project_options
+            cpr_project_warnings
+            cpr_platform_options
+    )
+
+    target_include_directories(cpr_metadata_command_tests
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/src
+    )
+
+    gtest_discover_tests(cpr_metadata_command_tests
+        TEST_PREFIX metadata_command.
+    )
+
+    add_executable(cpr_state_machine_contract_tests
+        state_machine_contract_test.cpp
+    )
+
+    target_link_libraries(cpr_state_machine_contract_tests
+        PRIVATE
+            ${CPR_GTEST_LINK_TARGET}
+            cpr_metadata
+            cpr_project_options
+            cpr_project_warnings
+            cpr_platform_options
+    )
+
+    target_include_directories(cpr_state_machine_contract_tests
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/src
+    )
+
+    gtest_discover_tests(cpr_state_machine_contract_tests
+        TEST_PREFIX state_machine_contract.
+    )
+endif()
+
 if(TARGET cpr_rpc)
     add_executable(cpr_raft_rpc_tests
         raft_rpc_service_test.cpp

@@ -1,5 +1,6 @@
 add_library(cpr_metadata
     metadata_command.cpp
+    metadata_state_machine.cpp
 )
 
 target_include_directories(cpr_metadata

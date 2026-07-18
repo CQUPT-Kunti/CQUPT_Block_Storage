@@ -253,7 +253,7 @@
   - Done: Raft module does not include Store, Placement, Task, or metadata business types.
   - Parallel: No.
 
-- [ ] T037 [US2] P8-T02 Implement MetadataStateMachine apply, query, snapshot, and restore in `cross-platform-raft/src/metadata/metadata_state_machine.h/.cpp`
+- [X] T037 [US2] P8-T02 Implement MetadataStateMachine apply, query, snapshot, and restore in `cross-platform-raft/src/metadata/metadata_state_machine.h/.cpp`
   - Scope: Apply MetadataCommand in log-index order, expose query state, create snapshots, restore snapshots, and prevent duplicate application by index.
   - Dependencies: T036.
   - Done: Metadata state can recover from snapshots and command replay without Raft internals.

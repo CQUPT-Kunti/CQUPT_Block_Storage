@@ -129,6 +129,8 @@ namespace cpr::raft
         std::uint64_t proposal_id = 0;
         common::LogIndex log_index = common::kInvalidLogIndex;
         common::Status status;
+        common::NodeId leader_id = common::kInvalidNodeId;
+        NodeAddress leader_address;
         bool final_result = false;
     };
 

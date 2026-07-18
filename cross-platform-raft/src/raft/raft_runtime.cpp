@@ -621,7 +621,26 @@ namespace cpr::raft
         const common::Status confirm_status =
             core_->ConfirmPersistence(confirmation);
         if (!confirm_status.ok())
+        {
+            for (auto it = pending_proposals_.begin();
+                 it != pending_proposals_.end();)
+            {
+                if (event.last_log_index != common::kInvalidLogIndex &&
+                    it->second <= event.last_log_index)
+                {
+                    EmitProposalResult(it->first,
+                                       it->second,
+                                       confirm_status,
+                                       true);
+                    it = pending_proposals_.erase(it);
+                }
+                else
+                {
+                    ++it;
+                }
+            }
             return;
+        }
         DrainCoreOutput();
     }
 
@@ -882,6 +901,12 @@ namespace cpr::raft
         if (range.empty())
             return common::Status::OK();
 
+        const common::LogIndex stable_index = core_->log().stable_index();
+        if (stable_index < range.begin)
+            return common::Status::OK();
+        if (range.end > stable_index)
+            range.end = stable_index;
+
         common::LogIndex schedule_start = range.begin;
         if (next_apply_schedule_ != common::kInvalidLogIndex &&
             next_apply_schedule_ >= schedule_start)
@@ -941,6 +966,7 @@ namespace cpr::raft
         result.proposal_id = proposal_id;
         result.log_index = log_index;
         result.status = std::move(status);
+        (void)ResolveLeaderHint(&result.leader_id, &result.leader_address);
         result.final_result = final_result;
         std::lock_guard<std::mutex> lock(results_mutex_);
         if (proposal_results_.items.size() < proposal_results_.max_capacity)
@@ -981,17 +1007,17 @@ namespace cpr::raft
         }
         const auto find_member =
             [leader_id](const std::vector<RaftMember> &members, NodeAddress *address)
+        {
+            for (const RaftMember &member : members)
             {
-                for (const RaftMember &member : members)
+                if (member.node_id == *leader_id)
                 {
-                    if (member.node_id == *leader_id)
-                    {
-                        *address = member.address;
-                        return true;
-                    }
+                    *address = member.address;
+                    return true;
                 }
-                return false;
-            };
+            }
+            return false;
+        };
         if (!find_member(membership.voters, leader_address) &&
             !find_member(membership.learners, leader_address) &&
             !find_member(membership.next_voters, leader_address) &&
@@ -1024,7 +1050,16 @@ namespace cpr::raft
             completion.status = common::Status::OK();
             bool failed = false;
 
-            if (work.has_hard_state)
+            if (!work.entries.empty())
+            {
+                common::Status s = storage_->AppendEntries(work.entries);
+                if (!s.ok())
+                {
+                    completion.status = s;
+                    failed = true;
+                }
+            }
+            if (!failed && work.has_hard_state)
             {
                 common::Status s = storage_->SaveHardState(work.hard_state);
                 if (!s.ok())
@@ -1038,15 +1073,6 @@ namespace cpr::raft
                 {
                     completion.has_hard_state = true;
                     completion.hard_state = work.hard_state;
-                }
-            }
-            if (!failed && !work.entries.empty())
-            {
-                common::Status s = storage_->AppendEntries(work.entries);
-                if (!s.ok())
-                {
-                    completion.status = s;
-                    failed = true;
                 }
             }
 

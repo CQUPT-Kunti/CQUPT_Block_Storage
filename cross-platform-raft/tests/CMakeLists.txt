@@ -2,6 +2,16 @@ find_package(GTest CONFIG QUIET)
 if(NOT GTest_FOUND)
     find_package(GTest QUIET)
 endif()
+if(GTest_FOUND AND TARGET GTest::gtest)
+    get_target_property(_cpr_gtest_includes
+        GTest::gtest INTERFACE_INCLUDE_DIRECTORIES)
+    if(_cpr_gtest_includes MATCHES "/anaconda3/include")
+        message(WARNING
+            "Ignoring Anaconda GTest package because it exposes the whole "
+            "Anaconda include directory and can shadow vcpkg protobuf headers")
+        set(GTest_FOUND FALSE)
+    endif()
+endif()
 
 set(CPR_GTEST_LINK_TARGET "")
 if(GTest_FOUND)
@@ -238,6 +248,28 @@ if(TARGET cpr_metadata)
 
     gtest_discover_tests(cpr_metadata_state_machine_tests
         TEST_PREFIX metadata_state_machine.
+    )
+
+    add_executable(cpr_metadata_service_tests
+        metadata_service_test.cpp
+    )
+
+    target_link_libraries(cpr_metadata_service_tests
+        PRIVATE
+            ${CPR_GTEST_LINK_TARGET}
+            cpr_metadata
+            cpr_project_options
+            cpr_project_warnings
+            cpr_platform_options
+    )
+
+    target_include_directories(cpr_metadata_service_tests
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/src
+    )
+
+    gtest_discover_tests(cpr_metadata_service_tests
+        TEST_PREFIX metadata_service.
     )
 endif()
 

@@ -259,7 +259,7 @@
   - Done: Metadata state can recover from snapshots and command replay without Raft internals.
   - Parallel: No.
 
-- [ ] T038 [US2] P8-T03 Implement MetadataService proposal/query/result correlation in `cross-platform-raft/src/metadata/metadata_service.h/.cpp`
+- [X] T038 [US2] P8-T03 Implement MetadataService proposal/query/result correlation in `cross-platform-raft/src/metadata/metadata_service.h/.cpp`
   - Scope: Connect Metadata commands to RaftRuntime Proposal flow, query state machine data, and correlate client results after commit/apply.
   - Dependencies: T037, T023, T029.
   - Done: Propose success means committed and applied; alternate state machine tests can replace MetadataStateMachine without RaftCore changes.

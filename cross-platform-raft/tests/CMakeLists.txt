@@ -42,6 +42,47 @@ endif()
 
 include(GoogleTest)
 
+add_library(cpr_test_support STATIC
+    fixture_loader.cpp
+)
+
+target_link_libraries(cpr_test_support
+    PUBLIC
+        cpr_common
+        cpr_raft
+        cpr_project_options
+        cpr_project_warnings
+        cpr_platform_options
+)
+
+target_include_directories(cpr_test_support
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/src
+)
+
+add_executable(cpr_fixture_loader_tests
+    fixture_loader_test.cpp
+)
+
+target_link_libraries(cpr_fixture_loader_tests
+    PRIVATE
+        ${CPR_GTEST_LINK_TARGET}
+        cpr_test_support
+        cpr_project_options
+        cpr_project_warnings
+        cpr_platform_options
+)
+
+target_include_directories(cpr_fixture_loader_tests
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/src
+)
+
+gtest_discover_tests(cpr_fixture_loader_tests
+    TEST_PREFIX fixture_loader.
+)
+
 add_executable(cpr_phase1_tests
     status_test.cpp
     checksum_test.cpp

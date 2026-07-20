@@ -1,4 +1,5 @@
 add_library(cpr_store
+    placement_policy.cpp
     store_registry.cpp
 )
 

@@ -281,7 +281,7 @@
   - Done: Store id/address/generation/important states go through Raft; last_heartbeat_ms and transient load/latency remain leader-local.
   - Parallel: No.
 
-- [ ] T041 [P] [US3] P9-T02 Implement IPlacementPolicy and SimplePlacementPolicy in `cross-platform-raft/src/store/placement_policy.h` and `simple_placement_policy.h/.cpp`
+- [X] T041 [P] [US3] P9-T02 Implement IPlacementPolicy and SimplePlacementPolicy in `cross-platform-raft/src/store/placement_policy.h` and `simple_placement_policy.h/.cpp`
   - Scope: Select RUNNING stores with sufficient capacity, prevent duplicates, sort by remaining capacity descending, break ties by Store ID, and return clear insufficient node/capacity errors.
   - Dependencies: T040.
   - Done: Placement can later be replaced without changing RaftCore, StoreRegistry durable data, MetadataService primary contract, or RPC contracts.

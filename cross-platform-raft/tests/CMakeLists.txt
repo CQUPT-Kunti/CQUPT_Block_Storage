@@ -317,6 +317,28 @@ if(TARGET cpr_store)
     gtest_discover_tests(cpr_store_registry_tests
         TEST_PREFIX store_registry.
     )
+
+    add_executable(cpr_placement_policy_tests
+        placement_policy_test.cpp
+    )
+
+    target_link_libraries(cpr_placement_policy_tests
+        PRIVATE
+            ${CPR_GTEST_LINK_TARGET}
+            cpr_store
+            cpr_project_options
+            cpr_project_warnings
+            cpr_platform_options
+    )
+
+    target_include_directories(cpr_placement_policy_tests
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/src
+    )
+
+    gtest_discover_tests(cpr_placement_policy_tests
+        TEST_PREFIX placement_policy.
+    )
 endif()
 
 if(TARGET cpr_rpc)

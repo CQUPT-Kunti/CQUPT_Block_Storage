@@ -12,8 +12,11 @@ namespace cpr::metadata
     namespace
     {
 
-        constexpr std::uint8_t kMetadataSnapshotFormatVersion = 1;
+        constexpr std::uint8_t kMetadataSnapshotFormatVersion = 2;
+        constexpr std::uint8_t kLegacyMetadataSnapshotFormatVersion = 1;
         constexpr std::size_t kMaxMetadataSnapshotRecords = 4096;
+        constexpr std::size_t kMaxMetadataSnapshotStores = 4096;
+        constexpr std::size_t kMaxMetadataSnapshotTasks = 4096;
         constexpr std::size_t kSnapshotHeaderBytes = 1 + 4 + 8 + 8;
 
         common::Status RequireRecord(MetadataStateRecord *record)
@@ -94,6 +97,21 @@ namespace cpr::metadata
             }
         }
 
+        void AppendStoreState(store::StoreState state, raft::OpaquePayload *payload)
+        {
+            AppendU8(static_cast<std::uint8_t>(state), payload);
+        }
+
+        void AppendTaskType(store::TaskType type, raft::OpaquePayload *payload)
+        {
+            AppendU8(static_cast<std::uint8_t>(type), payload);
+        }
+
+        void AppendTaskState(store::TaskState state, raft::OpaquePayload *payload)
+        {
+            AppendU8(static_cast<std::uint8_t>(state), payload);
+        }
+
         class Decoder
         {
         public:
@@ -135,6 +153,22 @@ namespace cpr::metadata
                 return common::Status::OK();
             }
 
+            common::Status ReadU16(std::uint16_t *value)
+            {
+                if (value == nullptr)
+                {
+                    return common::Status::InvalidArgument("value must not be null");
+                }
+                if (remaining() < 2)
+                {
+                    return common::Status::Corruption("truncated metadata snapshot");
+                }
+                *value = (static_cast<std::uint16_t>(payload_[offset_]) << 8) |
+                         static_cast<std::uint16_t>(payload_[offset_ + 1]);
+                offset_ += 2;
+                return common::Status::OK();
+            }
+
             common::Status ReadU64(std::uint64_t *value)
             {
                 if (value == nullptr)
@@ -146,7 +180,7 @@ namespace cpr::metadata
                     return common::Status::Corruption("truncated metadata snapshot");
                 }
                 std::uint64_t result = 0;
-                for (int i = 0; i < 8; ++i)
+                for (std::size_t i = 0; i < 8; ++i)
                 {
                     result = (result << 8) | payload_[offset_ + i];
                 }
@@ -285,6 +319,200 @@ namespace cpr::metadata
             return common::Status::OK();
         }
 
+        void AppendU16(std::uint16_t value, raft::OpaquePayload *payload)
+        {
+            payload->push_back(static_cast<common::Byte>((value >> 8) & 0xFF));
+            payload->push_back(static_cast<common::Byte>(value & 0xFF));
+        }
+
+        common::Status AppendSnapshotString(const std::string &value,
+                                            raft::OpaquePayload *payload)
+        {
+            common::Status status = ValidateSnapshotLength(
+                value.size(),
+                kMaxMetadataCommandTargetBytes,
+                "metadata snapshot string");
+            if (!status.ok())
+            {
+                return status;
+            }
+            AppendU32(static_cast<std::uint32_t>(value.size()), payload);
+            AppendBytes(value, payload);
+            return common::Status::OK();
+        }
+
+        common::Status AppendSnapshotPayload(const raft::OpaquePayload &value,
+                                             raft::OpaquePayload *payload)
+        {
+            common::Status status = ValidateSnapshotLength(
+                value.size(),
+                kMaxMetadataCommandPayloadBytes,
+                "metadata snapshot payload");
+            if (!status.ok())
+            {
+                return status;
+            }
+            AppendU32(static_cast<std::uint32_t>(value.size()), payload);
+            AppendBytes(value, payload);
+            return common::Status::OK();
+        }
+
+        common::Status AppendPersistentStore(
+            const store::PersistentStoreInfo &store,
+            raft::OpaquePayload *payload)
+        {
+            AppendU64(store.id, payload);
+            AppendU64(store.capacity_bytes, payload);
+            AppendU64(store.used_bytes, payload);
+            AppendStoreState(store.state, payload);
+            AppendU64(store.generation, payload);
+            AppendU16(store.address.port, payload);
+            return AppendSnapshotString(store.address.host, payload);
+        }
+
+        common::Status ReadPersistentStore(
+            Decoder *decoder,
+            store::PersistentStoreInfo *store)
+        {
+            if (decoder == nullptr || store == nullptr)
+            {
+                return common::Status::InvalidArgument("store snapshot output must not be null");
+            }
+            std::uint8_t state = 0;
+            common::Status status = decoder->ReadU64(&store->id);
+            if (!status.ok())
+            {
+                return status;
+            }
+            status = decoder->ReadU64(&store->capacity_bytes);
+            if (!status.ok())
+            {
+                return status;
+            }
+            status = decoder->ReadU64(&store->used_bytes);
+            if (!status.ok())
+            {
+                return status;
+            }
+            status = decoder->ReadU8(&state);
+            if (!status.ok())
+            {
+                return status;
+            }
+            store->state = static_cast<store::StoreState>(state);
+            status = decoder->ReadU64(&store->generation);
+            if (!status.ok())
+            {
+                return status;
+            }
+            status = decoder->ReadU16(&store->address.port);
+            if (!status.ok())
+            {
+                return status;
+            }
+            std::uint32_t host_length = 0;
+            status = decoder->ReadU32(&host_length);
+            if (!status.ok())
+            {
+                return status;
+            }
+            return decoder->ReadString(host_length,
+                                       kMaxMetadataCommandTargetBytes,
+                                       &store->address.host);
+        }
+
+        common::Status AppendTaskRecord(const store::TaskRecord &task,
+                                        raft::OpaquePayload *payload)
+        {
+            AppendTaskType(task.type, payload);
+            AppendTaskState(task.state, payload);
+            AppendU64(task.assigned_store, payload);
+            AppendU64(task.generation, payload);
+            AppendU64(task.sequence, payload);
+            common::Status status = AppendSnapshotString(task.task_id, payload);
+            if (!status.ok())
+            {
+                return status;
+            }
+            status = AppendSnapshotPayload(task.target_payload, payload);
+            if (!status.ok())
+            {
+                return status;
+            }
+            return AppendSnapshotPayload(task.result_payload, payload);
+        }
+
+        common::Status ReadTaskRecord(Decoder *decoder,
+                                      store::TaskRecord *task)
+        {
+            if (decoder == nullptr || task == nullptr)
+            {
+                return common::Status::InvalidArgument("task snapshot output must not be null");
+            }
+            std::uint8_t type = 0;
+            std::uint8_t state = 0;
+            common::Status status = decoder->ReadU8(&type);
+            if (!status.ok())
+            {
+                return status;
+            }
+            status = decoder->ReadU8(&state);
+            if (!status.ok())
+            {
+                return status;
+            }
+            task->type = static_cast<store::TaskType>(type);
+            task->state = static_cast<store::TaskState>(state);
+            status = decoder->ReadU64(&task->assigned_store);
+            if (!status.ok())
+            {
+                return status;
+            }
+            status = decoder->ReadU64(&task->generation);
+            if (!status.ok())
+            {
+                return status;
+            }
+            status = decoder->ReadU64(&task->sequence);
+            if (!status.ok())
+            {
+                return status;
+            }
+            std::uint32_t length = 0;
+            status = decoder->ReadU32(&length);
+            if (!status.ok())
+            {
+                return status;
+            }
+            status = decoder->ReadString(length,
+                                         kMaxMetadataCommandIdBytes,
+                                         &task->task_id);
+            if (!status.ok())
+            {
+                return status;
+            }
+            status = decoder->ReadU32(&length);
+            if (!status.ok())
+            {
+                return status;
+            }
+            status = decoder->ReadPayload(length,
+                                          kMaxMetadataCommandPayloadBytes,
+                                          &task->target_payload);
+            if (!status.ok())
+            {
+                return status;
+            }
+            status = decoder->ReadU32(&length);
+            if (!status.ok())
+            {
+                return status;
+            }
+            return decoder->ReadPayload(length,
+                                        kMaxMetadataCommandPayloadBytes,
+                                        &task->result_payload);
+        }
+
     } // namespace
 
     common::Status MetadataStateMachine::Apply(
@@ -324,6 +552,28 @@ namespace cpr::metadata
             return common::Status::Busy("metadata log index gap is not allowed");
         }
 
+        if (command.type == MetadataCommandType::STORE_OPERATION)
+        {
+            status = ApplyStoreCommand(index, term, command);
+        }
+        else
+        {
+            status = ApplyOpaqueCommand(index, term, command);
+        }
+        if (!status.ok())
+        {
+            return status;
+        }
+        last_applied_index_ = index;
+        last_applied_term_ = term;
+        return common::Status::OK();
+    }
+
+    common::Status MetadataStateMachine::ApplyOpaqueCommand(
+        common::LogIndex index,
+        common::Term term,
+        const MetadataCommand &command)
+    {
         MetadataStateRecord candidate;
         auto it = records_.find(command.target_id);
         const bool exists = it != records_.end();
@@ -356,10 +606,110 @@ namespace cpr::metadata
 
         RecordMap next_records = records_;
         next_records[candidate.target_id] = std::move(candidate);
-
         records_ = std::move(next_records);
-        last_applied_index_ = index;
-        last_applied_term_ = term;
+        return common::Status::OK();
+    }
+
+    common::Status MetadataStateMachine::ApplyStoreCommand(
+        common::LogIndex index,
+        common::Term term,
+        const MetadataCommand &command)
+    {
+        StoreBusinessCommand store_command;
+        common::Status status =
+            DecodeStoreBusinessCommand(command.payload, &store_command);
+        if (!status.ok())
+        {
+            return status;
+        }
+
+        StoreBusinessResult result;
+        switch (store_command.kind)
+        {
+        case StoreBusinessCommandKind::REGISTER_STORE:
+            status = stores_.RegisterStore(store_command.store, &result.store);
+            break;
+        case StoreBusinessCommandKind::UPDATE_STORE_STATE:
+            status = stores_.UpdateStore(store_command.store_update, &result.store);
+            break;
+        case StoreBusinessCommandKind::REMOVE_STORE:
+        {
+            status = stores_.GetStore(store_command.store_id, &result.store);
+            if (!status.ok())
+            {
+                break;
+            }
+            if (store_command.store_update.expected_generation &&
+                result.store.generation != *store_command.store_update.expected_generation)
+            {
+                status = common::Status::Busy("store generation mismatch");
+                break;
+            }
+            status = stores_.RemoveStore(store_command.store_id);
+            break;
+        }
+        case StoreBusinessCommandKind::CREATE_TASK:
+        {
+            store::TaskRecord task;
+            status = tasks_.CreateTask(store_command.task_create, &task);
+            if (status.ok())
+            {
+                result.tasks.push_back(std::move(task));
+            }
+            break;
+        }
+        case StoreBusinessCommandKind::POLL_TASKS:
+            status = tasks_.AssignNextWaitingTasks(store_command.store_id,
+                                                   store_command.max_tasks,
+                                                   &result.tasks);
+            break;
+        case StoreBusinessCommandKind::REPORT_TASK_RESULT:
+        {
+            store::TaskRecord before;
+            const bool had_before =
+                tasks_.GetTask(store_command.task_result.task_id, &before).ok();
+            store::TaskRecord after;
+            status = tasks_.CompleteTask(store_command.task_result, &after);
+            if (status.ok())
+            {
+                result.duplicate_result =
+                    had_before && before.state == after.state &&
+                    before.result_payload == after.result_payload &&
+                    before.generation == after.generation;
+                result.tasks.push_back(std::move(after));
+            }
+            break;
+        }
+        }
+        if (!status.ok())
+        {
+            return status;
+        }
+
+        raft::OpaquePayload result_payload;
+        status = EncodeStoreBusinessResult(result, &result_payload);
+        if (!status.ok())
+        {
+            return status;
+        }
+
+        MetadataStateRecord record;
+        auto it = records_.find(command.target_id);
+        const bool exists = it != records_.end();
+        if (exists)
+        {
+            record = it->second;
+        }
+        else
+        {
+            record.target_id = command.target_id;
+        }
+        record.payload = std::move(result_payload);
+        record.generation = exists ? record.generation + 1 : 1;
+        record.last_command_id = command.command_id;
+        record.last_update_index = index;
+        record.last_update_term = term;
+        records_[record.target_id] = std::move(record);
         return common::Status::OK();
     }
 
@@ -375,6 +725,8 @@ namespace cpr::metadata
         }
 
         RecordMap records_copy;
+        std::vector<store::PersistentStoreInfo> stores_copy;
+        std::vector<store::TaskRecord> tasks_copy;
         common::LogIndex current_index = common::kInvalidLogIndex;
         common::Term current_term = common::kInitialTerm;
         {
@@ -382,6 +734,16 @@ namespace cpr::metadata
             current_index = last_applied_index_;
             current_term = last_applied_term_;
             records_copy = records_;
+            status = stores_.ExportPersistent(&stores_copy);
+            if (!status.ok())
+            {
+                return status;
+            }
+            status = tasks_.ExportPersistent(&tasks_copy);
+            if (!status.ok())
+            {
+                return status;
+            }
         }
 
         if (last_applied_index != current_index || last_applied_term != current_term)
@@ -415,6 +777,30 @@ namespace cpr::metadata
             AppendBytes(record.last_command_id, &encoded);
         }
 
+        if (stores_copy.size() > kMaxMetadataSnapshotStores ||
+            tasks_copy.size() > kMaxMetadataSnapshotTasks)
+        {
+            return common::Status::Busy("metadata snapshot business state exceeds limit");
+        }
+        AppendU32(static_cast<std::uint32_t>(stores_copy.size()), &encoded);
+        for (const store::PersistentStoreInfo &store : stores_copy)
+        {
+            status = AppendPersistentStore(store, &encoded);
+            if (!status.ok())
+            {
+                return status;
+            }
+        }
+        AppendU32(static_cast<std::uint32_t>(tasks_copy.size()), &encoded);
+        for (const store::TaskRecord &task : tasks_copy)
+        {
+            status = AppendTaskRecord(task, &encoded);
+            if (!status.ok())
+            {
+                return status;
+            }
+        }
+
         *snapshot_payload = std::move(encoded);
         return common::Status::OK();
     }
@@ -434,7 +820,8 @@ namespace cpr::metadata
         {
             return status;
         }
-        if (version != kMetadataSnapshotFormatVersion)
+        if (version != kMetadataSnapshotFormatVersion &&
+            version != kLegacyMetadataSnapshotFormatVersion)
         {
             return common::Status::Corruption("metadata snapshot version is not supported");
         }
@@ -550,12 +937,84 @@ namespace cpr::metadata
             }
         }
 
+        std::vector<store::PersistentStoreInfo> restored_stores;
+        std::vector<store::TaskRecord> restored_tasks;
+        if (version == kMetadataSnapshotFormatVersion)
+        {
+            std::uint32_t store_count = 0;
+            status = decoder.ReadU32(&store_count);
+            if (!status.ok())
+            {
+                return status;
+            }
+            if (store_count > kMaxMetadataSnapshotStores)
+            {
+                return common::Status::Corruption("metadata snapshot store count exceeds limit");
+            }
+            restored_stores.reserve(store_count);
+            for (std::uint32_t i = 0; i < store_count; ++i)
+            {
+                store::PersistentStoreInfo store;
+                status = ReadPersistentStore(&decoder, &store);
+                if (!status.ok())
+                {
+                    return status;
+                }
+                restored_stores.push_back(std::move(store));
+            }
+
+            std::uint32_t task_count = 0;
+            status = decoder.ReadU32(&task_count);
+            if (!status.ok())
+            {
+                return status;
+            }
+            if (task_count > kMaxMetadataSnapshotTasks)
+            {
+                return common::Status::Corruption("metadata snapshot task count exceeds limit");
+            }
+            restored_tasks.reserve(task_count);
+            for (std::uint32_t i = 0; i < task_count; ++i)
+            {
+                store::TaskRecord task;
+                status = ReadTaskRecord(&decoder, &task);
+                if (!status.ok())
+                {
+                    return status;
+                }
+                restored_tasks.push_back(std::move(task));
+            }
+        }
+
         if (decoder.remaining() != 0)
         {
             return common::Status::Corruption("metadata snapshot has trailing bytes");
         }
 
+        store::StoreRegistry validation_registry;
+        status = validation_registry.RestorePersistent(restored_stores);
+        if (!status.ok())
+        {
+            return status;
+        }
+        store::TaskManager validation_task_manager;
+        status = validation_task_manager.RestorePersistent(restored_tasks);
+        if (!status.ok())
+        {
+            return status;
+        }
+
         std::lock_guard<std::mutex> lock(mutex_);
+        status = stores_.RestorePersistent(restored_stores);
+        if (!status.ok())
+        {
+            return status;
+        }
+        status = tasks_.RestorePersistent(restored_tasks);
+        if (!status.ok())
+        {
+            return status;
+        }
         records_ = std::move(restored_records);
         last_applied_index_ = static_cast<common::LogIndex>(last_applied_index);
         last_applied_term_ = static_cast<common::Term>(last_applied_term);
@@ -597,6 +1056,39 @@ namespace cpr::metadata
         *index = last_applied_index_;
         *term = last_applied_term_;
         return common::Status::OK();
+    }
+
+    common::Status MetadataStateMachine::GetStore(store::StoreId store_id,
+                                                  store::StoreInfo *store) const
+    {
+        return stores_.GetStore(store_id, store);
+    }
+
+    common::Status MetadataStateMachine::ListStores(
+        std::vector<store::StoreInfo> *stores) const
+    {
+        return stores_.ListStores(stores);
+    }
+
+    common::Status MetadataStateMachine::UpdateStoreHeartbeat(
+        store::StoreId store_id,
+        std::int64_t heartbeat_ms,
+        store::StoreInfo *store)
+    {
+        return stores_.UpdateHeartbeat(store_id, heartbeat_ms, store);
+    }
+
+    common::Status MetadataStateMachine::GetTask(
+        const store::TaskId &task_id,
+        store::TaskRecord *task) const
+    {
+        return tasks_.GetTask(task_id, task);
+    }
+
+    common::Status MetadataStateMachine::ListTasks(
+        std::vector<store::TaskRecord> *tasks) const
+    {
+        return tasks_.ListTasks(tasks);
     }
 
 } // namespace cpr::metadata

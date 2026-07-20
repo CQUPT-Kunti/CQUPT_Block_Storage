@@ -13,6 +13,7 @@ target_link_libraries(cpr_metadata
     PUBLIC
         cpr_common
         cpr_raft
+        cpr_store
     PRIVATE
         cpr_project_options
         cpr_project_warnings

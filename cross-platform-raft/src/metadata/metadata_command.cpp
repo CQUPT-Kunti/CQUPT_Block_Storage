@@ -9,15 +9,64 @@ namespace cpr::metadata
     {
 
         constexpr std::uint16_t kFlagHasExpectedGeneration = 0x0001;
+        constexpr std::uint8_t kStoreBusinessCommandVersion = 1;
+        constexpr std::uint8_t kStoreBusinessResultVersion = 1;
+        constexpr std::size_t kMaxStoreBusinessItems = 4096;
 
         bool IsKnownType(MetadataCommandType type)
         {
             switch (type)
             {
             case MetadataCommandType::OPAQUE_OPERATION:
+            case MetadataCommandType::STORE_OPERATION:
                 return true;
             }
             return false;
+        }
+
+        bool IsKnownStoreCommandKind(StoreBusinessCommandKind kind)
+        {
+            switch (kind)
+            {
+            case StoreBusinessCommandKind::REGISTER_STORE:
+            case StoreBusinessCommandKind::UPDATE_STORE_STATE:
+            case StoreBusinessCommandKind::REMOVE_STORE:
+            case StoreBusinessCommandKind::CREATE_TASK:
+            case StoreBusinessCommandKind::POLL_TASKS:
+            case StoreBusinessCommandKind::REPORT_TASK_RESULT:
+                return true;
+            }
+            return false;
+        }
+
+        std::uint8_t EncodeStoreState(store::StoreState state)
+        {
+            return static_cast<std::uint8_t>(state);
+        }
+
+        std::uint8_t EncodeTaskType(store::TaskType type)
+        {
+            return static_cast<std::uint8_t>(type);
+        }
+
+        std::uint8_t EncodeTaskState(store::TaskState state)
+        {
+            return static_cast<std::uint8_t>(state);
+        }
+
+        store::StoreState DecodeStoreState(std::uint8_t state)
+        {
+            return static_cast<store::StoreState>(state);
+        }
+
+        store::TaskType DecodeTaskType(std::uint8_t type)
+        {
+            return static_cast<store::TaskType>(type);
+        }
+
+        store::TaskState DecodeTaskState(std::uint8_t state)
+        {
+            return static_cast<store::TaskState>(state);
         }
 
         common::Status RequirePayload(raft::OpaquePayload *payload)
@@ -172,7 +221,7 @@ namespace cpr::metadata
                     return common::Status::Corruption("truncated metadata command");
                 }
                 std::uint64_t result = 0;
-                for (int i = 0; i < 8; ++i)
+                for (std::size_t i = 0; i < 8; ++i)
                 {
                     result = (result << 8) | payload_[offset_ + i];
                 }
@@ -235,6 +284,275 @@ namespace cpr::metadata
             const raft::OpaquePayload &payload_;
             std::size_t offset_ = 0;
         };
+
+        common::Status ValidateStoreBusinessCommand(
+            const StoreBusinessCommand &command)
+        {
+            if (!IsKnownStoreCommandKind(command.kind))
+            {
+                return common::Status::InvalidArgument("store command kind is invalid");
+            }
+            switch (command.kind)
+            {
+            case StoreBusinessCommandKind::REGISTER_STORE:
+                if (command.store.id == 0 || command.store.address.host.empty() ||
+                    command.store.address.port == 0 ||
+                    command.store.capacity_bytes == 0 ||
+                    command.store.used_bytes > command.store.capacity_bytes)
+                {
+                    return common::Status::InvalidArgument("store registration command is invalid");
+                }
+                return ValidateLength(command.store.address.host.size(),
+                                      kMaxMetadataCommandTargetBytes,
+                                      "store address host");
+            case StoreBusinessCommandKind::UPDATE_STORE_STATE:
+                if (command.store_update.id == 0 ||
+                    !command.store_update.expected_generation ||
+                    !command.store_update.state)
+                {
+                    return common::Status::InvalidArgument("store state update command is invalid");
+                }
+                return common::Status::OK();
+            case StoreBusinessCommandKind::REMOVE_STORE:
+                if (command.store_id == 0 ||
+                    !command.store_update.expected_generation)
+                {
+                    return common::Status::InvalidArgument("store remove command is invalid");
+                }
+                return common::Status::OK();
+            case StoreBusinessCommandKind::CREATE_TASK:
+                if (command.task_create.task_id.empty())
+                {
+                    return common::Status::InvalidArgument("task create command id is empty");
+                }
+                if (command.task_create.target_payload.size() >
+                    kMaxMetadataCommandPayloadBytes)
+                {
+                    return common::Status::InvalidArgument("task create payload exceeds limit");
+                }
+                return ValidateLength(command.task_create.task_id.size(),
+                                      kMaxMetadataCommandIdBytes,
+                                      "task id");
+            case StoreBusinessCommandKind::POLL_TASKS:
+                if (command.store_id == 0 || command.max_tasks == 0)
+                {
+                    return common::Status::InvalidArgument("task poll command is invalid");
+                }
+                return common::Status::OK();
+            case StoreBusinessCommandKind::REPORT_TASK_RESULT:
+                if (command.task_result.store_id == 0 ||
+                    command.task_result.task_id.empty() ||
+                    (command.task_result.final_state != store::TaskState::SUCCESS &&
+                     command.task_result.final_state != store::TaskState::FAILED))
+                {
+                    return common::Status::InvalidArgument("task result command is invalid");
+                }
+                if (command.task_result.result_payload.size() >
+                    kMaxMetadataCommandPayloadBytes)
+                {
+                    return common::Status::InvalidArgument("task result payload exceeds limit");
+                }
+                return ValidateLength(command.task_result.task_id.size(),
+                                      kMaxMetadataCommandIdBytes,
+                                      "task id");
+            }
+            return common::Status::InvalidArgument("store command kind is invalid");
+        }
+
+        common::Status AppendStringField(const std::string &value,
+                                         raft::OpaquePayload *payload)
+        {
+            common::Status status =
+                ValidateLength(value.size(), kMaxMetadataCommandTargetBytes, "string field");
+            if (!status.ok())
+            {
+                return status;
+            }
+            AppendU32(static_cast<std::uint32_t>(value.size()), payload);
+            return AppendBytes(value, payload);
+        }
+
+        common::Status AppendPayloadField(const raft::OpaquePayload &value,
+                                          raft::OpaquePayload *payload)
+        {
+            common::Status status =
+                ValidateLength(value.size(), kMaxMetadataCommandPayloadBytes, "payload field");
+            if (!status.ok())
+            {
+                return status;
+            }
+            AppendU32(static_cast<std::uint32_t>(value.size()), payload);
+            return AppendBytes(value, payload);
+        }
+
+        common::Status ReadStringField(Decoder *decoder,
+                                       std::size_t max_length,
+                                       std::string *value)
+        {
+            std::uint32_t length = 0;
+            common::Status status = decoder->ReadU32(&length);
+            if (!status.ok())
+            {
+                return status;
+            }
+            return decoder->ReadString(length, max_length, value);
+        }
+
+        common::Status ReadPayloadField(Decoder *decoder,
+                                        raft::OpaquePayload *value)
+        {
+            std::uint32_t length = 0;
+            common::Status status = decoder->ReadU32(&length);
+            if (!status.ok())
+            {
+                return status;
+            }
+            return decoder->ReadPayload(length,
+                                        kMaxMetadataCommandPayloadBytes,
+                                        value);
+        }
+
+        void AppendStoreInfo(const store::StoreInfo &store,
+                             raft::OpaquePayload *payload)
+        {
+            AppendU64(store.id, payload);
+            AppendU64(store.capacity_bytes, payload);
+            AppendU64(store.used_bytes, payload);
+            AppendU8(EncodeStoreState(store.state), payload);
+            AppendU64(store.generation, payload);
+            AppendU16(store.address.port, payload);
+        }
+
+        common::Status AppendStoreInfoWithHost(const store::StoreInfo &store,
+                                               raft::OpaquePayload *payload)
+        {
+            AppendStoreInfo(store, payload);
+            return AppendStringField(store.address.host, payload);
+        }
+
+        common::Status ReadStoreInfo(Decoder *decoder,
+                                     store::StoreInfo *store)
+        {
+            if (store == nullptr)
+            {
+                return common::Status::InvalidArgument("store output must not be null");
+            }
+            std::uint8_t state = 0;
+            common::Status status = decoder->ReadU64(&store->id);
+            if (!status.ok())
+            {
+                return status;
+            }
+            status = decoder->ReadU64(&store->capacity_bytes);
+            if (!status.ok())
+            {
+                return status;
+            }
+            status = decoder->ReadU64(&store->used_bytes);
+            if (!status.ok())
+            {
+                return status;
+            }
+            status = decoder->ReadU8(&state);
+            if (!status.ok())
+            {
+                return status;
+            }
+            store->state = DecodeStoreState(state);
+            status = decoder->ReadU64(&store->generation);
+            if (!status.ok())
+            {
+                return status;
+            }
+            std::uint16_t port = 0;
+            status = decoder->ReadU16(&port);
+            if (!status.ok())
+            {
+                return status;
+            }
+            store->address.port = port;
+            status = ReadStringField(decoder,
+                                     kMaxMetadataCommandTargetBytes,
+                                     &store->address.host);
+            if (!status.ok())
+            {
+                return status;
+            }
+            store->last_heartbeat_ms = 0;
+            return common::Status::OK();
+        }
+
+        common::Status AppendTaskRecord(const store::TaskRecord &task,
+                                        raft::OpaquePayload *payload)
+        {
+            AppendU8(EncodeTaskType(task.type), payload);
+            AppendU8(EncodeTaskState(task.state), payload);
+            AppendU64(task.assigned_store, payload);
+            AppendU64(task.generation, payload);
+            AppendU64(task.sequence, payload);
+            common::Status status = AppendStringField(task.task_id, payload);
+            if (!status.ok())
+            {
+                return status;
+            }
+            status = AppendPayloadField(task.target_payload, payload);
+            if (!status.ok())
+            {
+                return status;
+            }
+            return AppendPayloadField(task.result_payload, payload);
+        }
+
+        common::Status ReadTaskRecord(Decoder *decoder,
+                                      store::TaskRecord *task)
+        {
+            if (task == nullptr)
+            {
+                return common::Status::InvalidArgument("task output must not be null");
+            }
+            std::uint8_t type = 0;
+            std::uint8_t state = 0;
+            common::Status status = decoder->ReadU8(&type);
+            if (!status.ok())
+            {
+                return status;
+            }
+            status = decoder->ReadU8(&state);
+            if (!status.ok())
+            {
+                return status;
+            }
+            task->type = DecodeTaskType(type);
+            task->state = DecodeTaskState(state);
+            status = decoder->ReadU64(&task->assigned_store);
+            if (!status.ok())
+            {
+                return status;
+            }
+            status = decoder->ReadU64(&task->generation);
+            if (!status.ok())
+            {
+                return status;
+            }
+            status = decoder->ReadU64(&task->sequence);
+            if (!status.ok())
+            {
+                return status;
+            }
+            status = ReadStringField(decoder,
+                                     kMaxMetadataCommandIdBytes,
+                                     &task->task_id);
+            if (!status.ok())
+            {
+                return status;
+            }
+            status = ReadPayloadField(decoder, &task->target_payload);
+            if (!status.ok())
+            {
+                return status;
+            }
+            return ReadPayloadField(decoder, &task->result_payload);
+        }
 
     } // namespace
 
@@ -433,6 +751,337 @@ namespace cpr::metadata
         }
 
         *command = std::move(decoded);
+        return common::Status::OK();
+    }
+
+    common::Status EncodeStoreBusinessCommand(
+        const StoreBusinessCommand &command,
+        raft::OpaquePayload *payload)
+    {
+        common::Status status = RequirePayload(payload);
+        if (!status.ok())
+        {
+            return status;
+        }
+        status = ValidateStoreBusinessCommand(command);
+        if (!status.ok())
+        {
+            return status;
+        }
+
+        raft::OpaquePayload encoded;
+        AppendU8(kStoreBusinessCommandVersion, &encoded);
+        AppendU8(static_cast<std::uint8_t>(command.kind), &encoded);
+        AppendU64(command.store_id, &encoded);
+        AppendU32(command.max_tasks, &encoded);
+
+        status = AppendStoreInfoWithHost(command.store, &encoded);
+        if (!status.ok())
+        {
+            return status;
+        }
+
+        AppendU64(command.store_update.id, &encoded);
+        AppendU64(command.store_update.expected_generation.value_or(0), &encoded);
+        AppendU64(command.store_update.capacity_bytes.value_or(0), &encoded);
+        AppendU64(command.store_update.used_bytes.value_or(0), &encoded);
+        AppendU8(command.store_update.state
+                     ? EncodeStoreState(*command.store_update.state)
+                     : 0xFF,
+                 &encoded);
+
+        AppendU8(EncodeTaskType(command.task_create.type), &encoded);
+        status = AppendStringField(command.task_create.task_id, &encoded);
+        if (!status.ok())
+        {
+            return status;
+        }
+        status = AppendPayloadField(command.task_create.target_payload, &encoded);
+        if (!status.ok())
+        {
+            return status;
+        }
+
+        AppendU64(command.task_result.store_id, &encoded);
+        AppendU8(EncodeTaskState(command.task_result.final_state), &encoded);
+        AppendU64(command.task_result.expected_generation.value_or(0), &encoded);
+        status = AppendStringField(command.task_result.task_id, &encoded);
+        if (!status.ok())
+        {
+            return status;
+        }
+        status = AppendPayloadField(command.task_result.result_payload, &encoded);
+        if (!status.ok())
+        {
+            return status;
+        }
+
+        *payload = std::move(encoded);
+        return common::Status::OK();
+    }
+
+    common::Status DecodeStoreBusinessCommand(
+        const raft::OpaquePayload &payload,
+        StoreBusinessCommand *command)
+    {
+        if (command == nullptr)
+        {
+            return common::Status::InvalidArgument("store command output must not be null");
+        }
+
+        Decoder decoder(payload);
+        std::uint8_t version = 0;
+        std::uint8_t kind = 0;
+        StoreBusinessCommand decoded;
+
+        common::Status status = decoder.ReadU8(&version);
+        if (!status.ok())
+        {
+            return status;
+        }
+        if (version != kStoreBusinessCommandVersion)
+        {
+            return common::Status::Corruption("store command version is not supported");
+        }
+        status = decoder.ReadU8(&kind);
+        if (!status.ok())
+        {
+            return status;
+        }
+        decoded.kind = static_cast<StoreBusinessCommandKind>(kind);
+
+        status = decoder.ReadU64(&decoded.store_id);
+        if (!status.ok())
+        {
+            return status;
+        }
+        status = decoder.ReadU32(&decoded.max_tasks);
+        if (!status.ok())
+        {
+            return status;
+        }
+        status = ReadStoreInfo(&decoder, &decoded.store);
+        if (!status.ok())
+        {
+            return status;
+        }
+
+        status = decoder.ReadU64(&decoded.store_update.id);
+        if (!status.ok())
+        {
+            return status;
+        }
+        std::uint64_t expected_generation = 0;
+        std::uint64_t capacity = 0;
+        std::uint64_t used = 0;
+        std::uint8_t state = 0;
+        status = decoder.ReadU64(&expected_generation);
+        if (!status.ok())
+        {
+            return status;
+        }
+        status = decoder.ReadU64(&capacity);
+        if (!status.ok())
+        {
+            return status;
+        }
+        status = decoder.ReadU64(&used);
+        if (!status.ok())
+        {
+            return status;
+        }
+        status = decoder.ReadU8(&state);
+        if (!status.ok())
+        {
+            return status;
+        }
+        if (expected_generation != 0)
+        {
+            decoded.store_update.expected_generation = expected_generation;
+        }
+        if (capacity != 0)
+        {
+            decoded.store_update.capacity_bytes = capacity;
+        }
+        if (used != 0)
+        {
+            decoded.store_update.used_bytes = used;
+        }
+        if (state != 0xFF)
+        {
+            decoded.store_update.state = DecodeStoreState(state);
+        }
+
+        std::uint8_t task_type = 0;
+        status = decoder.ReadU8(&task_type);
+        if (!status.ok())
+        {
+            return status;
+        }
+        decoded.task_create.type = DecodeTaskType(task_type);
+        status = ReadStringField(&decoder,
+                                 kMaxMetadataCommandIdBytes,
+                                 &decoded.task_create.task_id);
+        if (!status.ok())
+        {
+            return status;
+        }
+        status = ReadPayloadField(&decoder, &decoded.task_create.target_payload);
+        if (!status.ok())
+        {
+            return status;
+        }
+
+        status = decoder.ReadU64(&decoded.task_result.store_id);
+        if (!status.ok())
+        {
+            return status;
+        }
+        std::uint8_t final_state = 0;
+        status = decoder.ReadU8(&final_state);
+        if (!status.ok())
+        {
+            return status;
+        }
+        decoded.task_result.final_state = DecodeTaskState(final_state);
+        std::uint64_t task_generation = 0;
+        status = decoder.ReadU64(&task_generation);
+        if (!status.ok())
+        {
+            return status;
+        }
+        if (task_generation != 0)
+        {
+            decoded.task_result.expected_generation = task_generation;
+        }
+        status = ReadStringField(&decoder,
+                                 kMaxMetadataCommandIdBytes,
+                                 &decoded.task_result.task_id);
+        if (!status.ok())
+        {
+            return status;
+        }
+        status = ReadPayloadField(&decoder, &decoded.task_result.result_payload);
+        if (!status.ok())
+        {
+            return status;
+        }
+        if (decoder.remaining() != 0)
+        {
+            return common::Status::Corruption("store command has trailing bytes");
+        }
+
+        status = ValidateStoreBusinessCommand(decoded);
+        if (!status.ok())
+        {
+            return status.code() == common::StatusCode::kInvalidArgument
+                       ? common::Status::Corruption(status.message())
+                       : status;
+        }
+        *command = std::move(decoded);
+        return common::Status::OK();
+    }
+
+    common::Status EncodeStoreBusinessResult(
+        const StoreBusinessResult &result,
+        raft::OpaquePayload *payload)
+    {
+        common::Status status = RequirePayload(payload);
+        if (!status.ok())
+        {
+            return status;
+        }
+        if (result.tasks.size() > kMaxStoreBusinessItems)
+        {
+            return common::Status::InvalidArgument("store result has too many tasks");
+        }
+
+        raft::OpaquePayload encoded;
+        AppendU8(kStoreBusinessResultVersion, &encoded);
+        AppendU8(result.duplicate_result ? 1 : 0, &encoded);
+        status = AppendStoreInfoWithHost(result.store, &encoded);
+        if (!status.ok())
+        {
+            return status;
+        }
+        AppendU32(static_cast<std::uint32_t>(result.tasks.size()), &encoded);
+        for (const store::TaskRecord &task : result.tasks)
+        {
+            status = AppendTaskRecord(task, &encoded);
+            if (!status.ok())
+            {
+                return status;
+            }
+        }
+        *payload = std::move(encoded);
+        return common::Status::OK();
+    }
+
+    common::Status DecodeStoreBusinessResult(
+        const raft::OpaquePayload &payload,
+        StoreBusinessResult *result)
+    {
+        if (result == nullptr)
+        {
+            return common::Status::InvalidArgument("store result output must not be null");
+        }
+
+        Decoder decoder(payload);
+        std::uint8_t version = 0;
+        std::uint8_t duplicate = 0;
+        StoreBusinessResult decoded;
+
+        common::Status status = decoder.ReadU8(&version);
+        if (!status.ok())
+        {
+            return status;
+        }
+        if (version != kStoreBusinessResultVersion)
+        {
+            return common::Status::Corruption("store result version is not supported");
+        }
+        status = decoder.ReadU8(&duplicate);
+        if (!status.ok())
+        {
+            return status;
+        }
+        if (duplicate > 1)
+        {
+            return common::Status::Corruption("store result duplicate flag is invalid");
+        }
+        decoded.duplicate_result = duplicate == 1;
+        status = ReadStoreInfo(&decoder, &decoded.store);
+        if (!status.ok())
+        {
+            return status;
+        }
+        std::uint32_t task_count = 0;
+        status = decoder.ReadU32(&task_count);
+        if (!status.ok())
+        {
+            return status;
+        }
+        if (task_count > kMaxStoreBusinessItems)
+        {
+            return common::Status::Corruption("store result task count exceeds limit");
+        }
+        decoded.tasks.reserve(task_count);
+        for (std::uint32_t i = 0; i < task_count; ++i)
+        {
+            store::TaskRecord task;
+            status = ReadTaskRecord(&decoder, &task);
+            if (!status.ok())
+            {
+                return status;
+            }
+            decoded.tasks.push_back(std::move(task));
+        }
+        if (decoder.remaining() != 0)
+        {
+            return common::Status::Corruption("store result has trailing bytes");
+        }
+
+        *result = std::move(decoded);
         return common::Status::OK();
     }
 

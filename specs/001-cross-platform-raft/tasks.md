@@ -293,7 +293,7 @@
   - Done: TaskDispatcher can later be replaced without changing RaftCore, MetadataStateMachine, or primary Store RPC contracts.
   - Parallel: Yes, after T040; edits task files only.
 
-- [ ] T043 [US3] P9-T04 Implement Store control service integration in `cross-platform-raft/src/rpc/store_rpc_service.h/.cpp` and `cross-platform-raft/src/metadata/metadata_service.cpp`
+- [X] T043 [US3] P9-T04 Implement Store control service integration in `cross-platform-raft/src/rpc/store_rpc_service.h/.cpp` and `cross-platform-raft/src/metadata/metadata_service.cpp`
   - Scope: Implement Register, Heartbeat, Stop, Remove, PollTasks, ReportTaskResult adapters; make heartbeats leader-local; route important transitions through Metadata consensus.
   - Dependencies: T041, T042, T029, T038.
   - Done: Ordinary heartbeats are not individually written to Raft, while important RUNNING/STOPPED/FAILED transitions are committed.

@@ -7,12 +7,15 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "common/status.h"
 #include "metadata/metadata_command.h"
 #include "metadata/metadata_state_machine.h"
 #include "raft/raft_runtime.h"
 #include "raft/raft_types.h"
+#include "store/store_registry.h"
+#include "store/task_manager.h"
 
 namespace cpr::metadata
 {
@@ -33,6 +36,20 @@ namespace cpr::metadata
         MetadataStateRecord record;
         common::LogIndex last_applied_index = common::kInvalidLogIndex;
         common::Term last_applied_term = common::kInitialTerm;
+    };
+
+    struct StoreControlResult
+    {
+        common::Status status;
+        std::uint64_t proposal_id = 0;
+        std::string command_id;
+        common::LogIndex applied_index = common::kInvalidLogIndex;
+        common::NodeId leader_id = common::kInvalidNodeId;
+        raft::NodeAddress leader_address;
+        store::StoreInfo store;
+        std::vector<store::TaskRecord> tasks;
+        bool duplicate_result = false;
+        bool final_result = false;
     };
 
     class MetadataService
@@ -57,10 +74,49 @@ namespace cpr::metadata
                                MetadataProposalResult *result);
         common::Status Query(const std::string &target_id,
                              MetadataQueryResult *result) const;
+        common::Status RegisterStore(const std::string &command_id,
+                                     const store::StoreInfo &store,
+                                     std::chrono::milliseconds timeout,
+                                     StoreControlResult *result);
+        common::Status StopStore(const std::string &command_id,
+                                 store::StoreId store_id,
+                                 std::uint64_t expected_generation,
+                                 std::chrono::milliseconds timeout,
+                                 StoreControlResult *result);
+        common::Status RemoveStore(const std::string &command_id,
+                                   store::StoreId store_id,
+                                   std::uint64_t expected_generation,
+                                   std::chrono::milliseconds timeout,
+                                   StoreControlResult *result);
+        common::Status CreateTaskForTest(const std::string &command_id,
+                                         const store::TaskCreateRequest &task,
+                                         std::chrono::milliseconds timeout,
+                                         StoreControlResult *result);
+        common::Status PollTasks(store::StoreId store_id,
+                                 std::uint32_t max_tasks,
+                                 std::chrono::milliseconds timeout,
+                                 StoreControlResult *result);
+        common::Status ReportTaskResult(
+            const store::TaskResultReport &report,
+            std::chrono::milliseconds timeout,
+            StoreControlResult *result);
+        common::Status UpdateStoreHeartbeat(store::StoreId store_id,
+                                            std::int64_t heartbeat_ms,
+                                            store::StoreInfo *store);
+        common::Status GetStore(store::StoreId store_id,
+                                store::StoreInfo *store) const;
+        common::Status GetTask(const store::TaskId &task_id,
+                               store::TaskRecord *task) const;
 
     private:
         common::Status ValidateDependencies() const;
         std::uint64_t NextProposalId();
+        std::string NextGeneratedCommandId(const char *prefix);
+        common::Status ProposeStoreCommand(const std::string &command_id,
+                                           const std::string &target_id,
+                                           const StoreBusinessCommand &command,
+                                           std::chrono::milliseconds timeout,
+                                           StoreControlResult *result);
         bool TakeProposalResult(std::uint64_t proposal_id,
                                 raft::ProposalResult *result);
         void AbandonProposal(std::uint64_t proposal_id);
@@ -70,6 +126,7 @@ namespace cpr::metadata
         MetadataStateMachine *state_machine_ = nullptr;
         Options options_;
         std::atomic<std::uint64_t> next_proposal_id_{1};
+        std::atomic<std::uint64_t> next_store_command_id_{1};
 
         mutable std::mutex results_mutex_;
         std::map<std::uint64_t, raft::ProposalResult> cached_results_;

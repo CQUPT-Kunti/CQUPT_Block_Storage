@@ -6,6 +6,7 @@ endif()
 add_library(cpr_rpc
     raft_rpc_service.cpp
     metadata_rpc_service.cpp
+    store_rpc_service.cpp
 )
 
 target_include_directories(cpr_rpc
@@ -16,6 +17,8 @@ target_include_directories(cpr_rpc
 target_link_libraries(cpr_rpc
     PUBLIC
         cpr_raft
+        cpr_metadata
+        cpr_store
         cpr_proto_generated
     PRIVATE
         cpr_project_options

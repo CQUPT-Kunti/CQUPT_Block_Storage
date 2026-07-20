@@ -389,6 +389,7 @@ if(TARGET cpr_rpc)
     add_executable(cpr_raft_rpc_tests
         raft_rpc_service_test.cpp
         metadata_rpc_service_test.cpp
+        store_rpc_service_test.cpp
     )
 
     target_link_libraries(cpr_raft_rpc_tests

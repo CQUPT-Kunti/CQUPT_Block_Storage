@@ -275,7 +275,7 @@
 
 **Goal**: Implement the Metadata example store, placement, and task control plane for US3.
 
-- [ ] T040 [US3] P9-T01 Implement StoreRegistry and StoreInfo in `cross-platform-raft/src/store/store_types.h` and `store_registry.h/.cpp`
+- [X] T040 [US3] P9-T01 Implement StoreRegistry and StoreInfo in `cross-platform-raft/src/store/store_types.h` and `store_registry.h/.cpp`
   - Scope: Implement StoreInfo, RUNNING/STOPPED/FAILED, registration, duplicate registration, updates, stopping, failed state, removal, lookup, listing, generation, and durable transition commands.
   - Dependencies: T038.
   - Done: Store id/address/generation/important states go through Raft; last_heartbeat_ms and transient load/latency remain leader-local.

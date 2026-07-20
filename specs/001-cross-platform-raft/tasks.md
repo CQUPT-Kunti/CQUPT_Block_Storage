@@ -299,7 +299,7 @@
   - Done: Ordinary heartbeats are not individually written to Raft, while important RUNNING/STOPPED/FAILED transitions are committed.
   - Parallel: No.
 
-- [ ] T044 [US3] P9-T05 Run consolidated business example tests in `cross-platform-raft/tests/store_metadata_test.cpp`
+- [X] T044 [US3] P9-T05 Run consolidated business example tests in `cross-platform-raft/tests/store_metadata_test.cpp`
   - Scope: Verify registration, duplicate registration, heartbeat timeout, failure detection, simple placement, insufficient capacity/nodes, task polling, duplicate polling, and duplicate result reporting.
   - Dependencies: T040-T043.
   - Done: Tests validate Metadata example behavior without adding Store/Placement/Task dependencies to RaftCore.

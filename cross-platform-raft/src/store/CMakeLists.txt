@@ -1,5 +1,7 @@
 add_library(cpr_store
     placement_policy.cpp
+    simple_task_dispatcher.cpp
+    task_manager.cpp
     store_registry.cpp
 )
 

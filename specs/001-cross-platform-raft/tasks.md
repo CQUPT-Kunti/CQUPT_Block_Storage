@@ -287,7 +287,7 @@
   - Done: Placement can later be replaced without changing RaftCore, StoreRegistry durable data, MetadataService primary contract, or RPC contracts.
   - Parallel: Yes, after T040; edits placement files only.
 
-- [ ] T042 [P] [US3] P9-T03 Implement TaskManager and SimpleTaskDispatcher in `cross-platform-raft/src/store/task_manager.h/.cpp`, `task_dispatcher.h`, and `simple_task_dispatcher.h/.cpp`
+- [X] T042 [P] [US3] P9-T03 Implement TaskManager and SimpleTaskDispatcher in `cross-platform-raft/src/store/task_manager.h/.cpp`, `task_dispatcher.h`, and `simple_task_dispatcher.h/.cpp`
   - Scope: Implement TaskType, TaskState, task creation, lookup, state updates, task_id idempotency, result storage, FIFO polling, poll limit, and duplicate result handling.
   - Dependencies: T040.
   - Done: TaskDispatcher can later be replaced without changing RaftCore, MetadataStateMachine, or primary Store RPC contracts.

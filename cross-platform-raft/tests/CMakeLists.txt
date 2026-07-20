@@ -339,6 +339,50 @@ if(TARGET cpr_store)
     gtest_discover_tests(cpr_placement_policy_tests
         TEST_PREFIX placement_policy.
     )
+
+    add_executable(cpr_task_manager_tests
+        task_manager_test.cpp
+    )
+
+    target_link_libraries(cpr_task_manager_tests
+        PRIVATE
+            ${CPR_GTEST_LINK_TARGET}
+            cpr_store
+            cpr_project_options
+            cpr_project_warnings
+            cpr_platform_options
+    )
+
+    target_include_directories(cpr_task_manager_tests
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/src
+    )
+
+    gtest_discover_tests(cpr_task_manager_tests
+        TEST_PREFIX task_manager.
+    )
+
+    add_executable(cpr_task_dispatcher_tests
+        task_dispatcher_test.cpp
+    )
+
+    target_link_libraries(cpr_task_dispatcher_tests
+        PRIVATE
+            ${CPR_GTEST_LINK_TARGET}
+            cpr_store
+            cpr_project_options
+            cpr_project_warnings
+            cpr_platform_options
+    )
+
+    target_include_directories(cpr_task_dispatcher_tests
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/src
+    )
+
+    gtest_discover_tests(cpr_task_dispatcher_tests
+        TEST_PREFIX task_dispatcher.
+    )
 endif()
 
 if(TARGET cpr_rpc)

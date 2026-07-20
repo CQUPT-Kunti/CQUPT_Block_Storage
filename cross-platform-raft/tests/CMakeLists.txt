@@ -271,6 +271,28 @@ if(TARGET cpr_metadata)
     gtest_discover_tests(cpr_metadata_service_tests
         TEST_PREFIX metadata_service.
     )
+
+    add_executable(cpr_state_machine_replacement_tests
+        state_machine_replacement_test.cpp
+    )
+
+    target_link_libraries(cpr_state_machine_replacement_tests
+        PRIVATE
+            ${CPR_GTEST_LINK_TARGET}
+            cpr_metadata
+            cpr_project_options
+            cpr_project_warnings
+            cpr_platform_options
+    )
+
+    target_include_directories(cpr_state_machine_replacement_tests
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/src
+    )
+
+    gtest_discover_tests(cpr_state_machine_replacement_tests
+        TEST_PREFIX state_machine_replacement.
+    )
 endif()
 
 if(TARGET cpr_rpc)

@@ -265,7 +265,7 @@
   - Done: Propose success means committed and applied; alternate state machine tests can replace MetadataStateMachine without RaftCore changes.
   - Parallel: No.
 
-- [ ] T039 [US2] P8-T04 Run consolidated state-machine tests in `cross-platform-raft/tests/metadata_state_machine_test.cpp`
+- [X] T039 [US2] P8-T04 Run consolidated state-machine tests in `cross-platform-raft/tests/metadata_state_machine_test.cpp`
   - Scope: Verify command submission, ordered apply, duplicate apply protection, query, snapshot create/restore, recovery, and test-only alternate state machine replacement.
   - Dependencies: T036-T038.
   - Done: Tests prove replacement boundaries without modifying RaftCore, RaftLog, RaftRuntime, RaftStorage, RaftTransport, or membership logic.

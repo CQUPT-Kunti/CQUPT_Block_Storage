@@ -44,12 +44,14 @@ include(GoogleTest)
 
 add_library(cpr_test_support STATIC
     fixture_loader.cpp
+    simulated_cluster.cpp
 )
 
 target_link_libraries(cpr_test_support
     PUBLIC
         cpr_common
         cpr_raft
+        cpr_transport
         cpr_project_options
         cpr_project_warnings
         cpr_platform_options
@@ -63,6 +65,7 @@ target_include_directories(cpr_test_support
 
 add_executable(cpr_fixture_loader_tests
     fixture_loader_test.cpp
+    simulated_cluster_test.cpp
 )
 
 target_link_libraries(cpr_fixture_loader_tests

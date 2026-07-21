@@ -309,7 +309,7 @@
 
 **Goal**: Finalize fixture-driven testing, tooling, cross-platform validation, and v1 acceptance.
 
-- [ ] T045 [P] P10-T01 Implement FixtureLoader and SimulatedCluster in `cross-platform-raft/tests/fixture_loader.h/.cpp` and `simulated_cluster.h/.cpp`
+- [X] T045 [P] P10-T01 Implement FixtureLoader and SimulatedCluster in `cross-platform-raft/tests/fixture_loader.h/.cpp` and `simulated_cluster.h/.cpp`
   - Scope: Load versioned fixtures by scenario name, validate checksums, provide deterministic simulated clusters and simulated transport for tests.
   - Dependencies: T035, T039.
   - Done: Normal tests load existing fixtures and do not regenerate large datasets.

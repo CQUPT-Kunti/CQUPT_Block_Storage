@@ -505,3 +505,55 @@ if(TARGET cpr_rpc AND TARGET cpr_transport)
         TEST_PREFIX raft_rpc_integration.
     )
 endif()
+
+if(TARGET cpr_client_tool_lib AND TARGET cpr_raftctl_lib)
+    add_executable(cpr_tools_rpc_tests
+        client_tool_test.cpp
+        raftctl_test.cpp
+    )
+
+    target_link_libraries(cpr_tools_rpc_tests
+        PRIVATE
+            ${CPR_GTEST_LINK_TARGET}
+            cpr_client_tool_lib
+            cpr_raftctl_lib
+            cpr_project_options
+            cpr_project_warnings
+            cpr_platform_options
+    )
+
+    target_include_directories(cpr_tools_rpc_tests
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/src
+            ${PROJECT_SOURCE_DIR}/tools
+    )
+
+    gtest_discover_tests(cpr_tools_rpc_tests
+        TEST_PREFIX tools.
+    )
+endif()
+
+if(TARGET cpr_wal_dump_lib)
+    add_executable(cpr_wal_dump_tests
+        wal_dump_test.cpp
+    )
+
+    target_link_libraries(cpr_wal_dump_tests
+        PRIVATE
+            ${CPR_GTEST_LINK_TARGET}
+            cpr_wal_dump_lib
+            cpr_project_options
+            cpr_project_warnings
+            cpr_platform_options
+    )
+
+    target_include_directories(cpr_wal_dump_tests
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/src
+            ${PROJECT_SOURCE_DIR}/tools
+    )
+
+    gtest_discover_tests(cpr_wal_dump_tests
+        TEST_PREFIX wal_dump.
+    )
+endif()

@@ -321,7 +321,7 @@
   - Done: Fixture generator is deterministic and only used when intentionally regenerating fixtures.
   - Parallel: Yes, after T045; edits fixture/tool files.
 
-- [ ] T047 [P] P10-T03 Implement client, raftctl, and wal_dump tools in `cross-platform-raft/tools/`
+- [X] T047 [P] P10-T03 Implement client, raftctl, and wal_dump tools in `cross-platform-raft/tools/`
   - Scope: Implement simple Metadata/Store client, raftctl cluster/membership commands, and wal_dump inspection of records, checksums, hard state, log entries, and snapshots.
   - Dependencies: T030, T035, T043.
   - Done: Tools use public RPC contracts or storage formats and do not depend on private test hooks.

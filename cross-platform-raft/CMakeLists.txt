@@ -53,6 +53,7 @@ add_subdirectory(src/raft)
 add_subdirectory(src/transport)
 add_subdirectory(src/rpc)
 add_subdirectory(src/server)
+add_subdirectory(tools)
 add_subdirectory(tests)
 
 message(STATUS "CrossPlatformRaftMetadataFoundation base CMake configuration is ready")

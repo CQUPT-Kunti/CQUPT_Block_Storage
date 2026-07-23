@@ -145,6 +145,20 @@ namespace cpr::raft
         bool final_result = false;
     };
 
+    struct RuntimeStatusSnapshot
+    {
+        common::NodeId node_id = common::kInvalidNodeId;
+        RaftRole role = RaftRole::FOLLOWER;
+        NodeState state = NodeState::STOPPED;
+        common::Term current_term = common::kInitialTerm;
+        common::NodeId voted_for = common::kInvalidNodeId;
+        common::LogIndex commit_index = common::kInvalidLogIndex;
+        common::NodeId leader_id = common::kInvalidNodeId;
+        NodeAddress leader_address;
+        MembershipView membership;
+        std::vector<PeerProgress> peers;
+    };
+
     // ===================================================================
     //  RaftRuntime
     // ===================================================================
@@ -213,6 +227,9 @@ namespace cpr::raft
         void ClearProposalResultOverflow();
         bool TryTakeMembershipChangeResult(const std::string &request_id,
                                            MembershipChangeResult *result);
+        common::Status GetStatusSnapshot(bool include_membership,
+                                         bool include_peer_progress,
+                                         RuntimeStatusSnapshot *snapshot) const;
 
         // --- Query ---
 
@@ -274,6 +291,7 @@ namespace cpr::raft
 
         std::unordered_map<common::NodeId, PeerMessageQueue> peer_queues_;
         mutable std::mutex peer_queues_mutex_;
+        mutable std::mutex core_mutex_;
         std::size_t peer_queue_capacity_ = 0;
 
         struct ResultQueue

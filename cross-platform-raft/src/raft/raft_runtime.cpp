@@ -358,6 +358,76 @@ namespace cpr::raft
         return false;
     }
 
+    common::Status RaftRuntime::GetStatusSnapshot(bool include_membership,
+                                                  bool include_peer_progress,
+                                                  RuntimeStatusSnapshot *snapshot) const
+    {
+        if (snapshot == nullptr)
+        {
+            return InvalidArgument("runtime status snapshot must not be null");
+        }
+        if (core_ == nullptr)
+        {
+            return InvalidArgument("runtime core is not initialized");
+        }
+
+        std::lock_guard<std::mutex> lock(core_mutex_);
+
+        RuntimeStatusSnapshot candidate;
+        candidate.node_id = core_->node_id();
+        candidate.role = core_->role();
+        candidate.state = state_ == RuntimeState::RUNNING
+                              ? NodeState::RUNNING
+                              : (state_ == RuntimeState::STOPPED
+                                     ? NodeState::STOPPED
+                                     : NodeState::FAILED);
+        candidate.current_term = core_->current_term();
+        candidate.voted_for = core_->voted_for();
+        candidate.commit_index = core_->hard_state().commit_index;
+        candidate.leader_id = core_->leader_id();
+
+        common::Status status =
+            ResolveLeaderHint(&candidate.leader_id, &candidate.leader_address);
+        if (!status.ok())
+        {
+            return status;
+        }
+        if (include_membership)
+        {
+            status = core_->GetMembershipView(&candidate.membership);
+            if (!status.ok())
+            {
+                return status;
+            }
+        }
+        if (include_peer_progress)
+        {
+            for (common::NodeId peer_id : core_->voter_ids())
+            {
+                PeerProgress progress;
+                status = core_->GetPeerProgress(peer_id, &progress);
+                if (!status.ok())
+                {
+                    return status;
+                }
+                candidate.peers.push_back(progress);
+            }
+            for (common::NodeId peer_id : core_->learner_ids())
+            {
+                PeerProgress progress;
+                status = core_->GetPeerProgress(peer_id, &progress);
+                if (!status.ok())
+                {
+                    return status;
+                }
+                candidate.peers.push_back(progress);
+            }
+        }
+
+        *snapshot = std::move(candidate);
+        return common::Status::OK();
+    }
+
     // ===================================================================
     //  DistributeOutputMessages
     // ===================================================================
@@ -459,6 +529,7 @@ namespace cpr::raft
             if (!pop_status.ok())
                 continue;
 
+            std::lock_guard<std::mutex> lock(core_mutex_);
             if (std::holds_alternative<TickEvent>(event))
                 ProcessTick();
             else if (std::holds_alternative<MessageEvent>(event))

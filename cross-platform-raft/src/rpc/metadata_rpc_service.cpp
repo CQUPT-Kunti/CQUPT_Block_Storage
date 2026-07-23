@@ -1,9 +1,12 @@
 #include "rpc/metadata_rpc_service.h"
 
 #include <chrono>
+#include <string>
 #include <thread>
 #include <utility>
 
+#include "metadata/metadata_command.h"
+#include "metadata/metadata_service.h"
 #include "raft/raft_runtime.h"
 
 namespace cpr::rpc
@@ -12,8 +15,11 @@ namespace cpr::rpc
     {
 
         using ProtoMember = cpr::common::v1::ClusterMember;
+        using ProtoQueryResponse = cpr::metadata::v1::QueryResponse;
         using ProtoResponse = cpr::metadata::v1::MembershipChangeResponse;
         using ProtoStatusCode = cpr::common::v1::RpcStatusCode;
+
+        ProtoStatusCode ToBusinessCode(const common::Status &status);
 
         raft::RaftMember FromProto(const ProtoMember &source)
         {
@@ -22,6 +28,95 @@ namespace cpr::rpc
             member.address.host = source.address().host();
             member.address.port = static_cast<std::uint16_t>(source.address().port());
             return member;
+        }
+
+        void FillRpcStatus(const common::Status &status,
+                           cpr::common::v1::RpcStatus *target)
+        {
+            if (target == nullptr)
+            {
+                return;
+            }
+            target->set_code(ToBusinessCode(status));
+            target->set_message(status.message());
+        }
+
+        cpr::common::v1::ClusterRole ToProtoRole(raft::RaftRole role)
+        {
+            switch (role)
+            {
+            case raft::RaftRole::FOLLOWER:
+                return cpr::common::v1::CLUSTER_ROLE_FOLLOWER;
+            case raft::RaftRole::CANDIDATE:
+                return cpr::common::v1::CLUSTER_ROLE_CANDIDATE;
+            case raft::RaftRole::LEADER:
+                return cpr::common::v1::CLUSTER_ROLE_LEADER;
+            case raft::RaftRole::LEARNER:
+                return cpr::common::v1::CLUSTER_ROLE_LEARNER;
+            }
+            return cpr::common::v1::CLUSTER_ROLE_UNSPECIFIED;
+        }
+
+        cpr::common::v1::NodeLifecycleState ToProtoState(raft::NodeState state)
+        {
+            switch (state)
+            {
+            case raft::NodeState::RUNNING:
+                return cpr::common::v1::NODE_LIFECYCLE_STATE_RUNNING;
+            case raft::NodeState::STOPPED:
+                return cpr::common::v1::NODE_LIFECYCLE_STATE_STOPPED;
+            case raft::NodeState::FAILED:
+                return cpr::common::v1::NODE_LIFECYCLE_STATE_FAILED;
+            }
+            return cpr::common::v1::NODE_LIFECYCLE_STATE_UNSPECIFIED;
+        }
+
+        void FillClusterMember(const raft::RaftMember &source,
+                               ProtoMember *target)
+        {
+            if (target == nullptr)
+            {
+                return;
+            }
+            target->set_node_id(source.node_id);
+            if (!source.address.host.empty())
+            {
+                target->mutable_address()->set_host(source.address.host);
+                target->mutable_address()->set_port(source.address.port);
+            }
+        }
+
+        void FillMembership(const raft::MembershipView &source,
+                            cpr::common::v1::MembershipView *target)
+        {
+            if (target == nullptr)
+            {
+                return;
+            }
+            target->set_configuration_id(source.configuration_id);
+            target->set_has_active_transition(source.has_active_transition);
+            for (const auto &member : source.voters)
+            {
+                FillClusterMember(member, target->add_voters());
+            }
+            for (const auto &member : source.learners)
+            {
+                FillClusterMember(member, target->add_learners());
+            }
+        }
+
+        void FillPeerProgress(const raft::PeerProgress &source,
+                              cpr::common::v1::PeerProgress *target)
+        {
+            if (target == nullptr)
+            {
+                return;
+            }
+            target->set_node_id(source.node_id);
+            target->set_is_learner(source.is_learner);
+            target->set_is_active(source.is_active);
+            target->set_match_index(source.match_index);
+            target->set_next_index(source.next_index);
         }
 
         grpc::Status ToGrpcStatus(const common::Status &status)
@@ -165,16 +260,157 @@ namespace cpr::rpc
 
     } // namespace
 
-    MetadataRpcServiceAdapter::MetadataRpcServiceAdapter(raft::RaftRuntime *runtime)
-        : runtime_(runtime)
+    MetadataRpcServiceAdapter::MetadataRpcServiceAdapter(
+        raft::RaftRuntime *runtime,
+        metadata::MetadataService *service)
+        : runtime_(runtime),
+          service_(service)
     {
     }
 
-    MetadataRpcServiceAdapter::MetadataRpcServiceAdapter(raft::RaftRuntime *runtime,
-                                                         Options options)
+    MetadataRpcServiceAdapter::MetadataRpcServiceAdapter(
+        raft::RaftRuntime *runtime,
+        metadata::MetadataService *service,
+        Options options)
         : runtime_(runtime),
+          service_(service),
           options_(std::move(options))
     {
+    }
+
+    grpc::Status MetadataRpcServiceAdapter::Propose(
+        grpc::ServerContext *context,
+        const cpr::metadata::v1::ProposeRequest *request,
+        cpr::metadata::v1::ProposeResponse *response)
+    {
+        if (runtime_ == nullptr || service_ == nullptr || context == nullptr ||
+            request == nullptr || response == nullptr)
+        {
+            return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+                                "metadata rpc is not initialized");
+        }
+        metadata::MetadataCommand command;
+        const raft::OpaquePayload encoded(request->command_payload().begin(),
+                                          request->command_payload().end());
+        common::Status status = metadata::DecodeMetadataCommand(encoded, &command);
+        if (!status.ok())
+        {
+            return ToGrpcStatus(status);
+        }
+
+        metadata::MetadataProposalResult result;
+        status = service_->Propose(
+            command,
+            std::chrono::milliseconds(request->timeout_ms() > 0
+                                          ? request->timeout_ms()
+                                          : options_.response_timeout.count()),
+            &result);
+        FillRpcStatus(status, response->mutable_status());
+        response->set_log_index(result.applied_index);
+        FillLeaderHint(result.leader_id, result.leader_address,
+                       response->mutable_leader());
+        raft::RuntimeStatusSnapshot snapshot;
+        if (runtime_->GetStatusSnapshot(false, false, &snapshot).ok())
+        {
+            response->set_term(snapshot.current_term);
+        }
+        return grpc::Status::OK;
+    }
+
+    grpc::Status MetadataRpcServiceAdapter::Query(
+        grpc::ServerContext *context,
+        const cpr::metadata::v1::QueryRequest *request,
+        ProtoQueryResponse *response)
+    {
+        if (service_ == nullptr || context == nullptr || request == nullptr ||
+            response == nullptr)
+        {
+            return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+                                "metadata rpc is not initialized");
+        }
+        const std::string target_id(request->query_payload().begin(),
+                                    request->query_payload().end());
+        metadata::MetadataQueryResult result;
+        const common::Status status = service_->Query(target_id, &result);
+        FillRpcStatus(status, response->mutable_status());
+        if (status.ok())
+        {
+            response->set_result_payload(result.record.payload.data(),
+                                         result.record.payload.size());
+            response->set_term(result.last_applied_term);
+        }
+        return grpc::Status::OK;
+    }
+
+    grpc::Status MetadataRpcServiceAdapter::GetLeader(
+        grpc::ServerContext *context,
+        const cpr::metadata::v1::GetLeaderRequest *request,
+        cpr::metadata::v1::GetLeaderResponse *response)
+    {
+        if (runtime_ == nullptr || context == nullptr || request == nullptr ||
+            response == nullptr)
+        {
+            return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+                                "metadata rpc is not initialized");
+        }
+
+        raft::RuntimeStatusSnapshot snapshot;
+        const common::Status status =
+            runtime_->GetStatusSnapshot(false, false, &snapshot);
+        FillRpcStatus(status, response->mutable_status());
+        if (status.ok())
+        {
+            FillLeaderHint(snapshot.leader_id, snapshot.leader_address,
+                           response->mutable_leader());
+        }
+        return grpc::Status::OK;
+    }
+
+    grpc::Status MetadataRpcServiceAdapter::GetStatus(
+        grpc::ServerContext *context,
+        const cpr::metadata::v1::GetStatusRequest *request,
+        cpr::metadata::v1::GetStatusResponse *response)
+    {
+        if (runtime_ == nullptr || context == nullptr || request == nullptr ||
+            response == nullptr)
+        {
+            return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+                                "metadata rpc is not initialized");
+        }
+
+        raft::RuntimeStatusSnapshot snapshot;
+        const common::Status status = runtime_->GetStatusSnapshot(
+            request->include_membership(),
+            request->include_peer_progress(),
+            &snapshot);
+        FillRpcStatus(status, response->mutable_status());
+        if (!status.ok())
+        {
+            return grpc::Status::OK;
+        }
+
+        auto *node = response->mutable_node();
+        node->set_node_id(snapshot.node_id);
+        node->set_role(ToProtoRole(snapshot.role));
+        node->set_state(ToProtoState(snapshot.state));
+        node->set_current_term(snapshot.current_term);
+        node->set_voted_for(snapshot.voted_for);
+        node->set_commit_index(snapshot.commit_index);
+        node->set_leader_id(snapshot.leader_id);
+        FillLeaderHint(snapshot.leader_id, snapshot.leader_address,
+                       node->mutable_leader());
+        if (request->include_membership())
+        {
+            FillMembership(snapshot.membership, node->mutable_membership());
+        }
+        if (request->include_peer_progress())
+        {
+            for (const auto &peer : snapshot.peers)
+            {
+                FillPeerProgress(peer, node->add_peers());
+            }
+        }
+        return grpc::Status::OK;
     }
 
     grpc::Status MetadataRpcServiceAdapter::AddLearner(

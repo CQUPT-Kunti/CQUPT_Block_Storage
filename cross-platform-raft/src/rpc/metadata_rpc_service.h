@@ -7,6 +7,11 @@
 
 #include "metadata.grpc.pb.h"
 
+namespace cpr::metadata
+{
+    class MetadataService;
+}
+
 namespace cpr::raft
 {
     class RaftRuntime;
@@ -25,8 +30,31 @@ namespace cpr::rpc
             std::chrono::milliseconds poll_interval{1};
         };
 
-        explicit MetadataRpcServiceAdapter(cpr::raft::RaftRuntime *runtime);
-        MetadataRpcServiceAdapter(cpr::raft::RaftRuntime *runtime, Options options);
+        explicit MetadataRpcServiceAdapter(cpr::raft::RaftRuntime *runtime,
+                                           cpr::metadata::MetadataService *service = nullptr);
+        MetadataRpcServiceAdapter(cpr::raft::RaftRuntime *runtime,
+                                  cpr::metadata::MetadataService *service,
+                                  Options options);
+
+        ::grpc::Status Propose(
+            ::grpc::ServerContext *context,
+            const ::cpr::metadata::v1::ProposeRequest *request,
+            ::cpr::metadata::v1::ProposeResponse *response) override;
+
+        ::grpc::Status Query(
+            ::grpc::ServerContext *context,
+            const ::cpr::metadata::v1::QueryRequest *request,
+            ::cpr::metadata::v1::QueryResponse *response) override;
+
+        ::grpc::Status GetLeader(
+            ::grpc::ServerContext *context,
+            const ::cpr::metadata::v1::GetLeaderRequest *request,
+            ::cpr::metadata::v1::GetLeaderResponse *response) override;
+
+        ::grpc::Status GetStatus(
+            ::grpc::ServerContext *context,
+            const ::cpr::metadata::v1::GetStatusRequest *request,
+            ::cpr::metadata::v1::GetStatusResponse *response) override;
 
         ::grpc::Status AddLearner(
             ::grpc::ServerContext *context,
@@ -45,6 +73,7 @@ namespace cpr::rpc
 
     private:
         cpr::raft::RaftRuntime *runtime_ = nullptr;
+        cpr::metadata::MetadataService *service_ = nullptr;
         Options options_{};
     };
 

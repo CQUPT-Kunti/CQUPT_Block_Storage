@@ -327,7 +327,7 @@
   - Done: Tools use public RPC contracts or storage formats and do not depend on private test hooks.
   - Parallel: Yes, after service/storage contracts are stable.
 
-- [ ] T048 P10-T04 Add server composition and runbook updates in `cross-platform-raft/src/server/` and `cross-platform-raft/README.md`
+- [X] T048 P10-T04 Add server composition and runbook updates in `cross-platform-raft/src/server/` and `cross-platform-raft/README.md`
   - Scope: Compose config, storage, transport, runtime, metadata, store service, process lifecycle, and document first-version limitations and run commands.
   - Dependencies: T030, T035, T043, T047.
   - Done: Server owns lifecycle only; docs list excluded v1 features and platform test constraints.

@@ -506,6 +506,31 @@ if(TARGET cpr_rpc AND TARGET cpr_transport)
     )
 endif()
 
+if(TARGET cpr_server)
+    add_executable(cpr_server_tests
+        server_lifecycle_test.cpp
+        server_composition_test.cpp
+    )
+
+    target_link_libraries(cpr_server_tests
+        PRIVATE
+            ${CPR_GTEST_LINK_TARGET}
+            cpr_server
+            cpr_project_options
+            cpr_project_warnings
+            cpr_platform_options
+    )
+
+    target_include_directories(cpr_server_tests
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/src
+    )
+
+    gtest_discover_tests(cpr_server_tests
+        TEST_PREFIX server.
+    )
+endif()
+
 if(TARGET cpr_client_tool_lib AND TARGET cpr_raftctl_lib)
     add_executable(cpr_tools_rpc_tests
         client_tool_test.cpp
